@@ -1,6 +1,8 @@
 "use client";
 export const dynamic = "force-dynamic";
 
+import { parseIbgCsv } from "../../lib/csv";
+import { insertTrades } from "../../lib/trades";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -55,6 +57,7 @@ export default function DashboardPage() {
 
   const [trades, setTrades] = useState<Exec[]>([]);
   const [loading, setLoading] = useState(true);
+  const [importing, setImporting] = useState(false);
 
   async function loadTrades() {
     try {
@@ -68,7 +71,39 @@ export default function DashboardPage() {
       setLoading(false);
     }
   }
+async function handleCsvImport(
+  event: React.ChangeEvent<HTMLInputElement>
+) {
+  const file = event.target.files?.[0];
 
+  if (!file) {
+    alert("Please select a CSV file");
+    return;
+  }
+
+  try {
+    setImporting(true);
+
+    const text = await file.text();
+    const parsed = parseIbgCsv(text);
+
+    if (!parsed.length) {
+      alert("No trades found in CSV");
+      return;
+    }
+
+    await insertTrades(parsed);
+    await loadTrades();
+
+    alert(`${parsed.length} trades saved`);
+  } catch (err: any) {
+    console.error(err);
+    alert(`Error importing CSV: ${err?.message || "unknown error"}`);
+  } finally {
+    setImporting(false);
+    event.target.value = "";
+  }
+}
   useEffect(() => {
     loadTrades();
   }, []);
@@ -188,7 +223,16 @@ export default function DashboardPage() {
               Track premium, assignments, capital deployed, monthly income and wheel stages.
             </p>
           </div>
-
+        <label className="cursor-pointer rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500">
+        {importing ? "Importing..." : "Import CSV"}
+        <input
+          type="file"
+          accept=".csv"
+          onChange={handleCsvImport}
+          className="hidden"
+          disabled={importing}
+          />
+        </label>
           <div className="flex flex-wrap gap-3">
             <button
               onClick={loadTrades}

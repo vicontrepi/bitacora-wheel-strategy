@@ -16,7 +16,12 @@ export default function HomePage() {
             >
               Demo Dashboard
             </a>
-
+            <a
+              href="/login"
+              className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
+            >
+              Login
+            </a>
             <a
               href="/dashboard"
               className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
