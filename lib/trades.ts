@@ -124,4 +124,22 @@ export async function deleteAllMyTrades() {
   }
 
   return true;
+  
+}
+export async function deleteTradeByTradeId(tradeId: string) {
+  const supabase = getSupabase();
+  const userId = await getCurrentUserId();
+
+  const { error } = await supabase
+    .from("trades")
+    .delete()
+    .eq("user_id", userId)
+    .eq("trade_id", tradeId);
+
+  if (error) {
+    console.error("Delete single trade error:", error);
+    throw error;
+  }
+
+  return true;
 }

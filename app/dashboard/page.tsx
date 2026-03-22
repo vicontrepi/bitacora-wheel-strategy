@@ -4,56 +4,50 @@ export const dynamic = "force-dynamic";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  ResponsiveContainer,
   BarChart,
   Bar,
-  CartesianGrid,
-  Cell,
-  PieChart,
-  Pie,
-  ResponsiveContainer,
-  Tooltip,
   XAxis,
   YAxis,
+  CartesianGrid,
+  Tooltip,
   Legend,
+  PieChart,
+  Pie,
+  Cell,
 } from "recharts";
-import { parseIbgCsv } from "../../lib/csv";
-import { fetchTrades, insertTrades } from "../../lib/trades";
-import { signOutUser } from "../../lib/auth";
+
 import type { Exec } from "../../lib/engine/types";
-import { getDashboardModel } from "../../lib/bitacora-core";
+import { fetchTrades } from "../../lib/trades";
+import { signOutUser } from "../../lib/auth";
+import { getDashboardModel, monthKey } from "../../lib/bitacora-core";
 
-function fmtMoney(value: number) {
-  return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
-}
-
-function monthKey(dateStr?: string) {
-  if (!dateStr) return "Unknown";
-  const d = new Date(dateStr);
-  if (Number.isNaN(d.getTime())) return "Unknown";
-  return d.toLocaleDateString("en-US", { year: "numeric", month: "short" });
+function fmtMoney(v: number) {
+  return Number(v || 0).toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 }
 
 function daysUntil(dateStr?: string) {
   if (!dateStr) return null;
   const today = new Date();
   const expiry = new Date(dateStr);
-
   today.setHours(0, 0, 0, 0);
   expiry.setHours(0, 0, 0, 0);
-
   const diffMs = expiry.getTime() - today.getTime();
-  return Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+  return Math.ceil(diffMs / 86400000);
 }
 
 const PIE_COLORS = [
-  "#6366f1",
-  "#22c55e",
-  "#f59e0b",
-  "#06b6d4",
-  "#a855f7",
-  "#ef4444",
-  "#84cc16",
-  "#f97316",
+  "#818cf8",
+  "#34d399",
+  "#fbbf24",
+  "#60a5fa",
+  "#f472b6",
+  "#a78bfa",
+  "#fb7185",
+  "#22d3ee",
 ];
 
 export default function DashboardPage() {
@@ -61,13 +55,12 @@ export default function DashboardPage() {
 
   const [trades, setTrades] = useState<Exec[]>([]);
   const [loading, setLoading] = useState(true);
-  const [importing, setImporting] = useState(false);
 
   async function loadTrades() {
     try {
       setLoading(true);
       const data = await fetchTrades();
-      setTrades((data || []) as Exec[]);
+      setTrades(data || []);
     } catch (err) {
       console.error(err);
       alert("Error loading trades");
@@ -80,181 +73,98 @@ export default function DashboardPage() {
     loadTrades();
   }, []);
 
-  async function handleCsvImport(
-    event: React.ChangeEvent<HTMLInputElement>
-  ) {
-    const file = event.target.files?.[0];
+  const model = useMemo(() => getDashboardModel(trades, { stockMethod: "FIFO" }), [trades]);
 
-    if (!file) {
-      alert("Please select a CSV file");
-      return;
-    }
+  const premiumCollected = Number(model.realizedPremium || 0);
+  const stockCapital = Number(model.capital?.stockCapital || 0);
+  const cspCapitalAtRisk = Number(model.capital?.cspCapitalOpen || 0);
+  const totalCapitalDeployed = Number(model.capital?.totalCapital || 0);
 
-    try {
-      setImporting(true);
+  const shortPutCount = model.openShortPuts.length;
+  const coveredCallCount = model.openCoveredCalls.length;
 
-      const text = await file.text();
-      const parsed = parseIbgCsv(text);
-
-      if (!parsed.length) {
-        alert("No trades found in CSV");
-        return;
-      }
-
-      await insertTrades(parsed);
-      await loadTrades();
-
-      alert(`${parsed.length} trades saved`);
-    } catch (err: any) {
-      console.error(err);
-      alert(`Error importing CSV: ${err?.message || "unknown error"}`);
-    } finally {
-      setImporting(false);
-      event.target.value = "";
-    }
-  }
-
-  const model = useMemo(() => getDashboardModel(trades), [trades]);
-
-const premiumCollected = model.realizedPremium;
-const stockCapital = model.capital.stockCapital;
-const cspCapitalAtRisk = model.capital.cspCapitalOpen;
-const totalCapitalDeployed = model.totalCapital;
-
-  const openShortPuts = useMemo(
-    () =>
-      model.options.rows.filter(
-        (r) => r.status === "OPEN" && r.strategy === "CSP" && Number(r.netQty) < 0
-      ),
-    [model.options]
-  );
-
-  const openCoveredCalls = useMemo(
-    () =>
-      model.options.rows.filter(
-        (r) => r.status === "OPEN" && r.strategy === "CC" && Number(r.netQty) < 0
-      ),
-    [model.options]
-  );
-
-  const expirationBuckets = useMemo(
-    () => ({
-      d7: model.options.rows.filter((r) => {
-        if (r.status !== "OPEN" || !r.expiry) return false;
-        const d = daysUntil(r.expiry);
-        return typeof d === "number" && d >= 0 && d <= 7;
-      }).length,
-
-      d14: model.options.rows.filter((r) => {
-        if (r.status !== "OPEN" || !r.expiry) return false;
-        const d = daysUntil(r.expiry);
-        return typeof d === "number" && d >= 0 && d <= 14;
-      }).length,
-
-      d30: model.options.rows.filter((r) => {
-        if (r.status !== "OPEN" || !r.expiry) return false;
-        const d = daysUntil(r.expiry);
-        return typeof d === "number" && d >= 0 && d <= 30;
-      }).length,
-
-      d60: model.options.rows.filter((r) => {
-        if (r.status !== "OPEN" || !r.expiry) return false;
-        const d = daysUntil(r.expiry);
-        return typeof d === "number" && d >= 0 && d <= 60;
-      }).length,
-
-      d90: model.options.rows.filter((r) => {
-        if (r.status !== "OPEN" || !r.expiry) return false;
-        const d = daysUntil(r.expiry);
-        return typeof d === "number" && d >= 0 && d <= 90;
-      }).length,
-    }),
-    [model.options]
-  );
-
-  const openWheelRows = useMemo(
-    () => [
-      ...openShortPuts.map((r) => ({
-        id: `OPT-${r.conid}-${r.expiry}-${r.strike}-${r.pc}`,
+  const openWheelRows = useMemo(() => {
+    return model.options.rows
+      .filter((r) => r.status === "OPEN")
+      .map((r, idx) => ({
+        id: `${r.conid}-${r.expiry}-${r.strike}-${idx}`,
         Symbol: r.underlying,
-        Type: "Cash Secured Put",
-        Side: "SHORT",
+        Type: r.strategy,
+        Side: Number(r.netQty) < 0 ? "SHORT" : "LONG",
         Qty: Math.abs(Number(r.netQty || 0)),
-        Strike: r.strike ?? "-",
-        Expiry: r.expiry ?? "-",
-        PremiumOrCost: Number(r.cashflow || 0),
-      })),
-
-      ...openCoveredCalls.map((r) => ({
-        id: `OPT-${r.conid}-${r.expiry}-${r.strike}-${r.pc}`,
-        Symbol: r.underlying,
-        Type: "Covered Call",
-        Side: "SHORT",
-        Qty: Math.abs(Number(r.netQty || 0)),
-        Strike: r.strike ?? "-",
-        Expiry: r.expiry ?? "-",
-        PremiumOrCost: Number(r.cashflow || 0),
-      })),
-
-      ...model.stocks.rows
-        .filter((r) => r.status === "OPEN")
-        .map((r) => ({
-          id: `STK-${r.symbol}`,
-          Symbol: r.symbol,
-          Type:
-            r.wheelStage === "CC_ACTIVE"
-              ? "Wheel Stock (CC Active)"
-              : r.wheelStage === "WHEEL_STOCK"
-              ? "Wheel Stock"
-              : "Stock",
-          Side: "LONG",
-          Qty: Number(r.netQty || 0),
-          Strike: "-",
-          Expiry: "-",
-          PremiumOrCost: -Math.abs(Number(r.costBasis || 0)),
-        })),
-    ],
-    [openShortPuts, openCoveredCalls, model.stocks]
-  );
-
-  const shortPutCount = openShortPuts.length;
-  const coveredCallCount = openCoveredCalls.length;
-
-  const roiMonthly = model.roi;
-
-  const premiumPerMonth = useMemo(() => {
-    const map = new Map<string, number>();
-
-    model.options.rows.forEach((row) => {
-      if (!row.lastDate) return;
-      const key = monthKey(row.lastDate);
-      map.set(key, (map.get(key) || 0) + Number(row.realized || 0));
-    });
-
-    return Array.from(map.entries()).map(([month, premium]) => ({
-      month,
-      premium: Number(premium.toFixed(2)),
-    }));
-  }, [model.options]);
-
-  const premiumPerTicker = useMemo(() => {
-    const map = new Map<string, number>();
-
-    model.options.rows.forEach((row) => {
-      map.set(
-        row.underlying,
-        (map.get(row.underlying) || 0) + Number(row.realized || 0)
-      );
-    });
-
-    return Array.from(map.entries())
-      .map(([name, value]) => ({
-        name,
-        value: Number(value.toFixed(2)),
+        Strike: r.strike,
+        Expiry: r.expiry,
+        PremiumOrCost: r.cashflow || 0,
       }))
-      .sort((a, b) => b.value - a.value)
-      .slice(0, 8);
+      .sort((a, b) => String(a.Expiry || "").localeCompare(String(b.Expiry || "")));
   }, [model.options]);
+
+  const expirationBuckets = useMemo(() => {
+    const openRows = model.options.rows.filter((r) => r.status === "OPEN" && r.expiry);
+
+    const countWithin = (n: number) =>
+      openRows.filter((r) => {
+        const d = daysUntil(r.expiry);
+        return typeof d === "number" && d >= 0 && d <= n;
+      }).length;
+
+    return {
+      d7: countWithin(7),
+      d14: countWithin(14),
+      d30: countWithin(30),
+      d60: countWithin(60),
+      d90: countWithin(90),
+      expired: model.options.rows.filter((r) => r.status === "EXPIRED").length,
+    };
+  }, [model.options]);
+
+  const wheelStages = useMemo(() => {
+    const counts = { STOCK: 0, WHEEL_STOCK: 0, CC_ACTIVE: 0 };
+
+    model.stocks.rows
+      .filter((r: any) => r.status === "OPEN")
+      .forEach((r: any) => {
+        if (r.wheelStage in counts) counts[r.wheelStage as keyof typeof counts] += 1;
+      });
+
+    return [
+      { name: "STOCK", value: counts.STOCK },
+      { name: "WHEEL_STOCK", value: counts.WHEEL_STOCK },
+      { name: "CC_ACTIVE", value: counts.CC_ACTIVE },
+    ];
+  }, [model.stocks]);
+
+  const incomeByMonth = useMemo(() => {
+    return (model.incomeRows || []).map((r: any) => ({
+      month: r.month,
+      stocks: Number(r.stocks || 0),
+      options: Number(r.options || 0),
+      total: Number(r.total || 0),
+    }));
+  }, [model.incomeRows]);
+
+  const roiByMonth = useMemo(() => {
+    return (model.roiRows || []).map((r: any) => ({
+      month: r.month,
+      roiPct: Number((Number(r.roi || 0) * 100).toFixed(2)),
+      realized: Number(r.realized || 0),
+      capAvg: Number(r.capAvg || 0),
+    }));
+  }, [model.roiRows]);
+
+  const capitalByTicker = useMemo(() => {
+    return (model.capital?.byTickerRows || [])
+      .map((r: any) => ({
+        name: String(r.ticker || ""),
+        value: Number(r.capital || 0),
+      }))
+      .slice(0, 8);
+  }, [model.capital]);
+
+  const realizedStocks = Number(model.stocks?.totalRealized || 0);
+  const realizedOptions = Number(model.options?.realizedTotal || 0);
+  const latestMonthlyRoi =
+    roiByMonth.length > 0 ? Number(roiByMonth[roiByMonth.length - 1].roiPct || 0) : 0;
 
   if (loading) {
     return (
@@ -275,22 +185,11 @@ const totalCapitalDeployed = model.totalCapital;
           <div>
             <h1 className="text-3xl font-bold">Bitácora Wheel Dashboard</h1>
             <p className="mt-2 text-slate-400">
-              Track premium, positions, assignments, expirations, and capital used.
+              Track premium, assignments, capital deployed, monthly income and wheel stages.
             </p>
           </div>
 
           <div className="flex flex-wrap gap-3">
-            <label className="cursor-pointer rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500">
-              {importing ? "Importing..." : "Import CSV"}
-              <input
-                type="file"
-                accept=".csv"
-                onChange={handleCsvImport}
-                className="hidden"
-                disabled={importing}
-              />
-            </label>
-
             <button
               onClick={loadTrades}
               className="rounded-xl border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
@@ -299,18 +198,26 @@ const totalCapitalDeployed = model.totalCapital;
             </button>
 
             <a
-            href="/stocks"
-            className="rounded-xl border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
+              href="/stocks"
+              className="rounded-xl border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
             >
-            Stocks Journal
+              Stocks Journal
             </a>
-            
+
             <a
-            href="/options"
-            className="rounded-xl border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
-              >
+              href="/options"
+              className="rounded-xl border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
+            >
               Options Journal
-              </a>
+            </a>
+
+            <a
+              href="/raw"
+              className="rounded-xl border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
+            >
+              Raw Trades
+            </a>
+
             <a
               href="/"
               className="rounded-xl border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
@@ -331,63 +238,23 @@ const totalCapitalDeployed = model.totalCapital;
         </div>
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
-          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-            <div className="text-sm text-slate-400">Premium Collected</div>
-            <div className="mt-2 text-2xl font-bold text-emerald-400">
-              ${fmtMoney(premiumCollected)}
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-            <div className="text-sm text-slate-400">Stock Capital</div>
-            <div className="mt-2 text-2xl font-bold">
-              ${fmtMoney(stockCapital)}
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-            <div className="text-sm text-slate-400">CSP Capital at Risk</div>
-            <div className="mt-2 text-2xl font-bold text-amber-300">
-              ${fmtMoney(cspCapitalAtRisk)}
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-            <div className="text-sm text-slate-400">Open Wheel Positions</div>
-            <div className="mt-2 text-2xl font-bold">
-              {openWheelRows.length}
-            </div>
-          </div>
+          <StatCard title="Realized P&L Stocks" value={`$${fmtMoney(realizedStocks)}`} tone="default" />
+          <StatCard title="Realized P&L Options" value={`$${fmtMoney(realizedOptions)}`} tone="green" />
+          <StatCard title="Open Options expiran" value={`${expirationBuckets.d7} / ${expirationBuckets.d14} / ${expirationBuckets.d30}`} subtitle="≤7d / ≤14d / ≤30d" tone="amber" />
+          <StatCard title="Expired Options" value={expirationBuckets.expired} tone="default" />
         </div>
 
-        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-4">
-          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-            <div className="text-sm text-slate-400">Total Capital Deployed</div>
-            <div className="mt-2 text-2xl font-bold text-indigo-400">
-              ${fmtMoney(totalCapitalDeployed)}
-            </div>
-          </div>
+        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+          <StatCard title="Capital CSP (cash-secured)" value={`$${fmtMoney(cspCapitalAtRisk)}`} tone="amber" />
+          <StatCard title="Capital Stocks (cost basis)" value={`$${fmtMoney(stockCapital)}`} tone="default" />
+          <StatCard title="Capital total (aprox)" value={`$${fmtMoney(totalCapitalDeployed)}`} tone="indigo" />
+        </div>
 
-          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-            <div className="text-sm text-slate-400">ROI Monthly</div>
-            <div className="mt-2 text-2xl font-bold text-indigo-300">
-              {roiMonthly.toFixed(2)}%
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-            <div className="text-sm text-slate-400">Open Short Puts</div>
-            <div className="mt-2 text-2xl font-bold text-amber-300">
-              {shortPutCount}
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-            <div className="text-sm text-slate-400">Open Covered Calls</div>
-            <div className="mt-2 text-2xl font-bold text-indigo-300">
-              {coveredCallCount}
-            </div>
-          </div>
+        <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-4">
+          <StatCard title="Premium Collected" value={`$${fmtMoney(premiumCollected)}`} tone="green" />
+          <StatCard title="Latest Monthly ROI" value={`${latestMonthlyRoi.toFixed(2)}%`} tone="indigo" />
+          <StatCard title="Open Short Puts" value={shortPutCount} tone="amber" />
+          <StatCard title="Open Covered Calls" value={coveredCallCount} tone="indigo" />
         </div>
 
         <div className="mt-8 grid grid-cols-2 gap-4 md:grid-cols-5">
@@ -399,47 +266,63 @@ const totalCapitalDeployed = model.totalCapital;
         </div>
 
         <div className="mt-10 grid grid-cols-1 gap-6 xl:grid-cols-2">
-          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-            <h2 className="mb-4 text-lg font-semibold">Premium per Month</h2>
-            <div className="h-80">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={premiumPerMonth}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                  <XAxis dataKey="month" stroke="#94a3b8" />
-                  <YAxis stroke="#94a3b8" />
-                  <Tooltip />
-                  <Legend />
-                  <Bar dataKey="premium" name="Premium" radius={[6, 6, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
+          <ChartCard title="Monthly Income Statement">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={incomeByMonth}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                <XAxis dataKey="month" stroke="#94a3b8" />
+                <YAxis stroke="#94a3b8" />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="stocks" name="Stocks" radius={[6, 6, 0, 0]} fill="#60a5fa" />
+                <Bar dataKey="options" name="Options" radius={[6, 6, 0, 0]} fill="#34d399" />
+                <Bar dataKey="total" name="Total" radius={[6, 6, 0, 0]} fill="#818cf8" />
+              </BarChart>
+            </ResponsiveContainer>
+          </ChartCard>
 
-          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-            <h2 className="mb-4 text-lg font-semibold">Premium by Ticker</h2>
-            <div className="h-80">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={premiumPerTicker}
-                    dataKey="value"
-                    nameKey="name"
-                    outerRadius={110}
-                    label
-                  >
-                    {premiumPerTicker.map((entry, index) => (
-                      <Cell
-                        key={`${entry.name}-${index}`}
-                        fill={PIE_COLORS[index % PIE_COLORS.length]}
-                      />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                  <Legend />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
+          <ChartCard title="Capital by Ticker">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={capitalByTicker} dataKey="value" nameKey="name" outerRadius={110} label>
+                  {capitalByTicker.map((entry, index) => (
+                    <Cell key={`${entry.name}-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip />
+                <Legend />
+              </PieChart>
+            </ResponsiveContainer>
+          </ChartCard>
+        </div>
+
+        <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
+          <ChartCard title="Monthly ROI %">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={roiByMonth}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                <XAxis dataKey="month" stroke="#94a3b8" />
+                <YAxis stroke="#94a3b8" />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="roiPct" name="ROI %" radius={[6, 6, 0, 0]} fill="#a78bfa" />
+              </BarChart>
+            </ResponsiveContainer>
+          </ChartCard>
+
+          <ChartCard title="Wheel Stages (Stocks OPEN)">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={wheelStages} dataKey="value" nameKey="name" outerRadius={110} label>
+                  {wheelStages.map((entry, index) => (
+                    <Cell key={`${entry.name}-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip />
+                <Legend />
+              </PieChart>
+            </ResponsiveContainer>
+          </ChartCard>
         </div>
 
         <div className="mt-10 rounded-2xl border border-slate-800 bg-slate-900 p-6">
@@ -496,6 +379,35 @@ const totalCapitalDeployed = model.totalCapital;
   );
 }
 
+function StatCard({
+  title,
+  value,
+  subtitle,
+  tone = "default",
+}: {
+  title: string;
+  value: string | number;
+  subtitle?: string;
+  tone?: "default" | "green" | "amber" | "indigo";
+}) {
+  const color =
+    tone === "green"
+      ? "text-emerald-400"
+      : tone === "amber"
+      ? "text-amber-300"
+      : tone === "indigo"
+      ? "text-indigo-400"
+      : "text-slate-100";
+
+  return (
+    <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+      <div className="text-sm text-slate-400">{title}</div>
+      <div className={`mt-2 text-2xl font-bold ${color}`}>{value}</div>
+      {subtitle ? <div className="mt-1 text-xs text-slate-500">{subtitle}</div> : null}
+    </div>
+  );
+}
+
 function ExpirationCard({
   title,
   count,
@@ -507,6 +419,21 @@ function ExpirationCard({
     <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5 text-center">
       <div className="text-sm text-slate-400">{title}</div>
       <div className="mt-2 text-2xl font-bold">{count}</div>
+    </div>
+  );
+}
+
+function ChartCard({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+      <h2 className="mb-4 text-lg font-semibold">{title}</h2>
+      <div className="h-80">{children}</div>
     </div>
   );
 }

@@ -13,11 +13,38 @@ function todayIso() {
 }
 
 function money(v: number) {
-  return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  return Number(v || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
 function makeTradeId(prefix: string) {
   return `${prefix}_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+}
+
+function daysUntil(dateStr?: string) {
+  if (!dateStr) return null;
+  const today = new Date();
+  const expiry = new Date(dateStr);
+
+  today.setHours(0, 0, 0, 0);
+  expiry.setHours(0, 0, 0, 0);
+
+  const diffMs = expiry.getTime() - today.getTime();
+  return Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+}
+
+function passesExpiryFilter(expiry?: string, filterValue: string = "ALL") {
+  if (filterValue === "ALL") return true;
+
+  const dte = daysUntil(expiry);
+
+  if (filterValue === "EXPIRED") {
+    return typeof dte === "number" && dte < 0;
+  }
+
+  const n = Number(filterValue);
+  if (!Number.isFinite(n) || n <= 0) return true;
+
+  return typeof dte === "number" && dte >= 0 && dte <= n;
 }
 
 type ManualForm = {
@@ -57,6 +84,7 @@ export default function OptionsPage() {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("ALL");
   const [strategy, setStrategy] = useState("ALL");
+  const [expiryFilter, setExpiryFilter] = useState("ALL");
 
   const [showManual, setShowManual] = useState(false);
   const [manualForm, setManualForm] = useState<ManualForm>(initialForm);
@@ -85,29 +113,92 @@ export default function OptionsPage() {
 
   const optionsModel = useMemo(() => computeOptions(trades), [trades]);
 
+  const expirationBuckets = useMemo(() => {
+    const openRows = optionsModel.rows.filter((r) => r.status === "OPEN" && r.expiry);
+
+    return {
+      d7: openRows.filter((r) => {
+        const d = daysUntil(r.expiry);
+        return typeof d === "number" && d >= 0 && d <= 7;
+      }).length,
+      d14: openRows.filter((r) => {
+        const d = daysUntil(r.expiry);
+        return typeof d === "number" && d >= 0 && d <= 14;
+      }).length,
+      d30: openRows.filter((r) => {
+        const d = daysUntil(r.expiry);
+        return typeof d === "number" && d >= 0 && d <= 30;
+      }).length,
+      d60: openRows.filter((r) => {
+        const d = daysUntil(r.expiry);
+        return typeof d === "number" && d >= 0 && d <= 60;
+      }).length,
+      d90: openRows.filter((r) => {
+        const d = daysUntil(r.expiry);
+        return typeof d === "number" && d >= 0 && d <= 90;
+      }).length,
+    };
+  }, [optionsModel]);
+
   const filteredOptions = useMemo(() => {
-    return optionsModel.rows.filter((row) => {
-      const matchesSearch =
-        !search ||
-        row.underlying.toLowerCase().includes(search.toLowerCase());
+    return [...optionsModel.rows]
+      .filter((row) => {
+        const matchesSearch =
+          !search ||
+          row.underlying.toLowerCase().includes(search.toLowerCase());
 
-      const matchesStatus =
-        status === "ALL" || row.status === status;
+        const matchesStatus = status === "ALL" || row.status === status;
+        const matchesStrategy = strategy === "ALL" || row.strategy === strategy;
+        const matchesExpiry = passesExpiryFilter(row.expiry, expiryFilter);
 
-      const matchesStrategy =
-        strategy === "ALL" || row.strategy === strategy;
+        return (
+          matchesSearch &&
+          matchesStatus &&
+          matchesStrategy &&
+          matchesExpiry
+        );
+      })
+      .sort((a, b) => {
+        const aIsOpen = a.status === "OPEN" ? 0 : 1;
+        const bIsOpen = b.status === "OPEN" ? 0 : 1;
+        if (aIsOpen !== bIsOpen) return aIsOpen - bIsOpen;
 
-      return matchesSearch && matchesStatus && matchesStrategy;
-    });
-  }, [optionsModel, search, status, strategy]);
+        const aDte = daysUntil(a.expiry);
+        const bDte = daysUntil(b.expiry);
+
+        if (aDte == null && bDte == null) return 0;
+        if (aDte == null) return 1;
+        if (bDte == null) return -1;
+
+        return aDte - bDte;
+      });
+  }, [optionsModel, search, status, strategy, expiryFilter]);
+
+  const openShortPuts = useMemo(
+    () =>
+      optionsModel.rows.filter(
+        (r) => r.status === "OPEN" && r.strategy === "CSP" && Number(r.netQty) < 0
+      ),
+    [optionsModel]
+  );
+
+  const openCoveredCalls = useMemo(
+    () =>
+      optionsModel.rows.filter(
+        (r) => r.status === "OPEN" && r.strategy === "CC" && Number(r.netQty) < 0
+      ),
+    [optionsModel]
+  );
 
   async function handleSaveManualTrade() {
     try {
       const qtyAbs = Math.abs(Number(manualForm.quantity || 0));
       const signedQty = manualForm.buySell === "SELL" ? -qtyAbs : qtyAbs;
-      const gross = qtyAbs * Number(manualForm.tradePrice || 0) * Number(manualForm.multiplier || 100);
-      const proceeds =
-        manualForm.buySell === "SELL" ? gross : -gross;
+      const gross =
+        qtyAbs *
+        Number(manualForm.tradePrice || 0) *
+        Number(manualForm.multiplier || 100);
+      const proceeds = manualForm.buySell === "SELL" ? gross : -gross;
 
       const trade: Exec = {
         TradeID: makeTradeId("MANUAL"),
@@ -119,10 +210,18 @@ export default function OptionsPage() {
         TradePrice: Number(manualForm.tradePrice || 0),
         Proceeds: proceeds,
         IBCommission: Number(manualForm.commission || 0),
-        Expiry: manualForm.assetClass === "OPT" ? manualForm.expiry : undefined,
-        Strike: manualForm.assetClass === "OPT" ? Number(manualForm.strike || 0) : undefined,
-        PutCall: manualForm.assetClass === "OPT" ? manualForm.putCall : undefined,
-        Multiplier: manualForm.assetClass === "OPT" ? Number(manualForm.multiplier || 100) : undefined,
+        Expiry:
+          manualForm.assetClass === "OPT" ? manualForm.expiry : undefined,
+        Strike:
+          manualForm.assetClass === "OPT"
+            ? Number(manualForm.strike || 0)
+            : undefined,
+        PutCall:
+          manualForm.assetClass === "OPT" ? manualForm.putCall : undefined,
+        Multiplier:
+          manualForm.assetClass === "OPT"
+            ? Number(manualForm.multiplier || 100)
+            : undefined,
         Source: "MANUAL",
         UnderlyingSymbol: manualForm.symbol.trim().toUpperCase(),
       };
@@ -151,7 +250,10 @@ export default function OptionsPage() {
       const qtyAbs = Math.abs(Number(closeTarget.netQty || 0));
       const closingSide = Number(closeTarget.netQty || 0) < 0 ? "BUY" : "SELL";
       const signedQty = closingSide === "SELL" ? -qtyAbs : qtyAbs;
-      const gross = qtyAbs * Number(closePrice || 0) * Number(closeTarget.multiplier || 100);
+      const gross =
+        qtyAbs *
+        Number(closePrice || 0) *
+        Number(closeTarget.multiplier || 100);
       const proceeds = closingSide === "SELL" ? gross : -gross;
 
       const trade: Exec = {
@@ -197,7 +299,7 @@ export default function OptionsPage() {
           <div>
             <h1 className="text-3xl font-bold">Options Journal</h1>
             <p className="mt-2 text-slate-400">
-              Open, closed and expired options with manual trade entry.
+              Open, closed and expired options with filters by strategy and DTE.
             </p>
           </div>
 
@@ -235,8 +337,23 @@ export default function OptionsPage() {
           </div>
         </div>
 
+        <div className="mb-6 grid grid-cols-2 gap-4 md:grid-cols-5">
+          <KpiCard title="≤ 7 Days" value={expirationBuckets.d7} />
+          <KpiCard title="≤ 14 Days" value={expirationBuckets.d14} />
+          <KpiCard title="≤ 30 Days" value={expirationBuckets.d30} />
+          <KpiCard title="≤ 60 Days" value={expirationBuckets.d60} />
+          <KpiCard title="≤ 90 Days" value={expirationBuckets.d90} />
+        </div>
+
+        <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-4">
+          <KpiCard title="Open Short Puts" value={openShortPuts.length} tone="amber" />
+          <KpiCard title="Open Covered Calls" value={openCoveredCalls.length} tone="indigo" />
+          <KpiCard title="Expired Contracts" value={optionsModel.rows.filter((r) => r.status === "EXPIRED").length} />
+          <KpiCard title="Filtered Rows" value={filteredOptions.length} />
+        </div>
+
         <div className="mb-6 rounded-2xl border border-slate-800 bg-slate-900 p-6">
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-5">
             <div>
               <div className="mb-2 text-sm text-slate-400">Search</div>
               <input
@@ -273,12 +390,39 @@ export default function OptionsPage() {
                 <option value="CC">CC</option>
                 <option value="BTC_PUT">BTC_PUT</option>
                 <option value="BTC_CALL">BTC_CALL</option>
+                <option value="OPT_OTHER">OPT_OTHER</option>
               </select>
             </div>
 
-            <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
-              <div className="text-sm text-slate-400">Rows</div>
-              <div className="mt-2 text-2xl font-bold">{filteredOptions.length}</div>
+            <div>
+              <div className="mb-2 text-sm text-slate-400">Expiry / DTE</div>
+              <select
+                value={expiryFilter}
+                onChange={(e) => setExpiryFilter(e.target.value)}
+                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm"
+              >
+                <option value="ALL">All</option>
+                <option value="7">≤ 7 días</option>
+                <option value="14">≤ 14 días</option>
+                <option value="30">≤ 30 días</option>
+                <option value="60">≤ 60 días</option>
+                <option value="90">≤ 90 días</option>
+                <option value="EXPIRED">Expired</option>
+              </select>
+            </div>
+
+            <div className="flex items-end">
+              <button
+                onClick={() => {
+                  setSearch("");
+                  setStatus("ALL");
+                  setStrategy("ALL");
+                  setExpiryFilter("ALL");
+                }}
+                className="w-full rounded-xl border border-slate-700 px-4 py-3 text-sm font-medium text-slate-200 hover:bg-slate-800"
+              >
+                Clear Filters
+              </button>
             </div>
           </div>
         </div>
@@ -292,6 +436,7 @@ export default function OptionsPage() {
                 <tr>
                   <th className="px-3 py-2 text-left">Underlying</th>
                   <th className="px-3 py-2 text-left">Expiry</th>
+                  <th className="px-3 py-2 text-left">DTE</th>
                   <th className="px-3 py-2 text-left">P/C</th>
                   <th className="px-3 py-2 text-left">Strike</th>
                   <th className="px-3 py-2 text-left">Mult</th>
@@ -306,33 +451,55 @@ export default function OptionsPage() {
               </thead>
 
               <tbody>
-                {filteredOptions.map((row) => (
-                  <tr key={`${row.conid}-${row.expiry}-${row.strike}-${row.pc}`} className="border-b border-slate-800">
-                    <td className="px-3 py-2">{row.underlying}</td>
-                    <td className="px-3 py-2">{row.expiry || "-"}</td>
-                    <td className="px-3 py-2">{row.pc || "-"}</td>
-                    <td className="px-3 py-2">{row.strike ?? "-"}</td>
-                    <td className="px-3 py-2">{row.multiplier}</td>
-                    <td className="px-3 py-2">{row.strategy}</td>
-                    <td className="px-3 py-2">{row.netQty}</td>
-                    <td className="px-3 py-2">{row.status}</td>
-                    <td className="px-3 py-2">${money(Number(row.cashflow || 0))}</td>
-                    <td className="px-3 py-2">${money(Number(row.realized || 0))}</td>
-                    <td className="px-3 py-2">{row.conid || "-"}</td>
-                    <td className="px-3 py-2">
-                      {row.status === "OPEN" ? (
-                        <button
-                          onClick={() => openCloseModal(row)}
-                          className="rounded-lg border border-slate-700 px-3 py-1 text-xs hover:bg-slate-800"
-                        >
-                          Close
-                        </button>
-                      ) : (
-                        <span className="text-slate-500">—</span>
-                      )}
+                {filteredOptions.length === 0 ? (
+                  <tr>
+                    <td colSpan={13} className="px-3 py-6 text-center text-slate-500">
+                      No options found.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  filteredOptions.map((row) => {
+                    const dte = daysUntil(row.expiry);
+
+                    return (
+                      <tr
+                        key={`${row.conid}-${row.expiry}-${row.strike}-${row.pc}`}
+                        className="border-b border-slate-800"
+                      >
+                        <td className="px-3 py-2">{row.underlying}</td>
+                        <td className="px-3 py-2">{row.expiry || "-"}</td>
+                        <td className="px-3 py-2">
+                          {typeof dte === "number" ? dte : "-"}
+                        </td>
+                        <td className="px-3 py-2">{row.pc || "-"}</td>
+                        <td className="px-3 py-2">{row.strike ?? "-"}</td>
+                        <td className="px-3 py-2">{row.multiplier}</td>
+                        <td className="px-3 py-2">{row.strategy}</td>
+                        <td className="px-3 py-2">{row.netQty}</td>
+                        <td className="px-3 py-2">{row.status}</td>
+                        <td className="px-3 py-2">
+                          ${money(Number(row.cashflow || 0))}
+                        </td>
+                        <td className="px-3 py-2">
+                          ${money(Number(row.realized || 0))}
+                        </td>
+                        <td className="px-3 py-2">{row.conid || "-"}</td>
+                        <td className="px-3 py-2">
+                          {row.status === "OPEN" ? (
+                            <button
+                              onClick={() => openCloseModal(row)}
+                              className="rounded-lg border border-slate-700 px-3 py-1 text-xs hover:bg-slate-800"
+                            >
+                              Close
+                            </button>
+                          ) : (
+                            <span className="text-slate-500">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
@@ -367,7 +534,10 @@ export default function OptionsPage() {
                   <input
                     value={manualForm.symbol}
                     onChange={(e) =>
-                      setManualForm({ ...manualForm, symbol: e.target.value.toUpperCase() })
+                      setManualForm({
+                        ...manualForm,
+                        symbol: e.target.value.toUpperCase(),
+                      })
                     }
                     className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm"
                   />
@@ -410,7 +580,10 @@ export default function OptionsPage() {
                     type="number"
                     value={manualForm.quantity}
                     onChange={(e) =>
-                      setManualForm({ ...manualForm, quantity: Number(e.target.value) })
+                      setManualForm({
+                        ...manualForm,
+                        quantity: Number(e.target.value),
+                      })
                     }
                     className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm"
                   />
@@ -422,7 +595,10 @@ export default function OptionsPage() {
                     step="0.01"
                     value={manualForm.tradePrice}
                     onChange={(e) =>
-                      setManualForm({ ...manualForm, tradePrice: Number(e.target.value) })
+                      setManualForm({
+                        ...manualForm,
+                        tradePrice: Number(e.target.value),
+                      })
                     }
                     className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm"
                   />
@@ -434,7 +610,10 @@ export default function OptionsPage() {
                     step="0.01"
                     value={manualForm.commission}
                     onChange={(e) =>
-                      setManualForm({ ...manualForm, commission: Number(e.target.value) })
+                      setManualForm({
+                        ...manualForm,
+                        commission: Number(e.target.value),
+                      })
                     }
                     className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm"
                   />
@@ -447,7 +626,10 @@ export default function OptionsPage() {
                         type="date"
                         value={manualForm.expiry}
                         onChange={(e) =>
-                          setManualForm({ ...manualForm, expiry: e.target.value })
+                          setManualForm({
+                            ...manualForm,
+                            expiry: e.target.value,
+                          })
                         }
                         className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm"
                       />
@@ -459,7 +641,10 @@ export default function OptionsPage() {
                         step="0.01"
                         value={manualForm.strike}
                         onChange={(e) =>
-                          setManualForm({ ...manualForm, strike: Number(e.target.value) })
+                          setManualForm({
+                            ...manualForm,
+                            strike: Number(e.target.value),
+                          })
                         }
                         className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm"
                       />
@@ -556,12 +741,6 @@ export default function OptionsPage() {
                   Cancel
                 </button>
 
-                <a
-                href="/stocks"
-                className="rounded-xl border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
-                >
-                Stocks Journal
-                </a>
                 <button
                   onClick={handleCloseTrade}
                   className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500"
@@ -588,6 +767,30 @@ function Field({
     <div>
       <div className="mb-2 text-sm text-slate-400">{label}</div>
       {children}
+    </div>
+  );
+}
+
+function KpiCard({
+  title,
+  value,
+  tone = "default",
+}: {
+  title: string;
+  value: number;
+  tone?: "default" | "amber" | "indigo";
+}) {
+  const toneClass =
+    tone === "amber"
+      ? "text-amber-300"
+      : tone === "indigo"
+      ? "text-indigo-300"
+      : "text-slate-100";
+
+  return (
+    <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5 text-center">
+      <div className="text-sm text-slate-400">{title}</div>
+      <div className={`mt-2 text-2xl font-bold ${toneClass}`}>{value}</div>
     </div>
   );
 }

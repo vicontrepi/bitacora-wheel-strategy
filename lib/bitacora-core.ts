@@ -27,6 +27,17 @@ type OptionRowLike = {
   credit?: number;
 };
 
+function isoDate(d: Date) {
+  return d.toISOString().slice(0, 10);
+}
+
+function endOfMonthISO(monthLabel: string) {
+  const d = new Date(`${monthLabel} 1`);
+  if (Number.isNaN(d.getTime())) return "";
+  const end = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+  return isoDate(end);
+}
+
 export function monthKey(dateStr?: string) {
   if (!dateStr) return "";
   const d = new Date(dateStr);
@@ -111,12 +122,14 @@ export function monthlyIncomeStatement(
 
   return months.map((mk) => {
     const slice = allExecs.filter((e) => monthKey(e.TradeDate) === mk);
+
     const st = computeStocks(
       slice,
       method,
       ctx.assignedBuyTradeIDs,
       ctx.ccActiveUnderlyings
     );
+
     const op = computeOptions(slice);
 
     const stocksRealized = Number(st?.totalRealized || 0);
@@ -151,19 +164,35 @@ export function monthlyROI(
   const income = monthlyIncomeStatement(allExecs, method);
   const months = income.map((r) => r.month);
 
-  return months.map((mk, idx) => {
-    const monthExecs = allExecs.filter((e) => monthKey(e.TradeDate) <= mk);
-    const capRaw = capitalSnapshot(monthExecs, method);
-    const cap = getCapitalFields(capRaw);
+  const capEnd = new Map<string, CapitalSnapshotLike>();
 
-    const monthIncome = Number(income[idx]?.total || 0);
-    const capitalBase = cap.totalCapital;
+  months.forEach((mk) => {
+    const eom = endOfMonthISO(mk);
+    const upTo = allExecs.filter((e) => e.TradeDate && e.TradeDate <= eom);
+    capEnd.set(mk, capitalSnapshot(upTo, method));
+  });
+
+  return months.map((mk, idx) => {
+    const endCap = getCapitalFields(capEnd.get(mk) || {});
+    const prevCap =
+      idx === 0
+        ? endCap
+        : getCapitalFields(capEnd.get(months[idx - 1]) || {});
+
+    const capStart = Number(prevCap.totalCapital || 0);
+    const capEndValue = Number(endCap.totalCapital || 0);
+    const capAvg = (capStart + capEndValue) / 2;
+
+    const realized = Number(income[idx]?.total || 0);
+    const roi = capAvg > 0 ? (realized / capAvg) * 100 : 0;
 
     return {
       month: mk,
-      income: monthIncome,
-      capital: capitalBase,
-      roi: capitalBase > 0 ? (monthIncome / capitalBase) * 100 : 0,
+      realized,
+      capStart,
+      capEnd: capEndValue,
+      capAvg,
+      roi,
     };
   });
 }
@@ -172,19 +201,23 @@ export function getDashboardModel(execs: Exec[], pref?: PrefLike) {
   const method: StockMethod = pref?.stockMethod === "AVG" ? "AVG" : "FIFO";
 
   const ctx = assignWheelTags(execs);
+
   const st = computeStocks(
     execs,
     method,
     ctx.assignedBuyTradeIDs,
     ctx.ccActiveUnderlyings
   );
+
   const op = computeOptions(execs);
+
   const capRaw = computeCapitalSnapshot(
     execs,
     method,
     ctx.assignedBuyTradeIDs,
     ctx.ccActiveUnderlyings
   );
+
   const cap = getCapitalFields(capRaw);
 
   const roiRows = monthlyROI(execs, method);

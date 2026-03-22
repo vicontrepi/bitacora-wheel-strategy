@@ -243,67 +243,154 @@ export function computeStocks(
   assignedBuyTradeIDs: Set<string> = new Set(),
   ccActiveUnderlyings: Set<string> = new Set()
 ) {
-  void method;
+  const stk = allExecs
+    .filter((e) => e.AssetClass === "STK" && e.Symbol && e.TradeDate)
+    .slice()
+    .sort(
+      (a, b) =>
+        String(a.TradeDate || "").localeCompare(String(b.TradeDate || "")) ||
+        String(a.TradeID || "").localeCompare(String(b.TradeID || ""))
+    );
 
-  const stk = allExecs.filter((e) => e.AssetClass === "STK");
-  const by = new Map<string, any>();
+  type Lot = {
+    qty: number;
+    costPerShare: number;
+    assigned: boolean;
+  };
 
-  function ensure(symbol: string) {
-    const k = symbol.toUpperCase();
-    if (!by.has(k)) {
-      by.set(k, {
-        symbol: k,
-        netQty: 0,
-        buyCost: 0,
-        sellQty: 0,
-        sellProceeds: 0,
+  type Position = {
+    symbol: string;
+    shares: number;
+    costBasis: number;
+    avgCost: number;
+    realized: number;
+    lots: Lot[];
+    assignedLotsShares: number;
+    lastDate?: string;
+  };
+
+  const positions = new Map<string, Position>();
+
+  function ensure(sym: string): Position {
+    const key = String(sym || "").toUpperCase();
+    if (!positions.has(key)) {
+      positions.set(key, {
+        symbol: key,
+        shares: 0,
+        costBasis: 0,
+        avgCost: 0,
+        realized: 0,
+        lots: [],
+        assignedLotsShares: 0,
         lastDate: "",
-        anyAssignedBuy: false,
       });
     }
-    return by.get(k);
+    return positions.get(key)!;
+  }
+
+  function cashflow(e: Exec) {
+    // mismo criterio del HTML:
+    // neto efectivo de la ejecución
+    return Number(e.Proceeds || 0) + Number(e.IBCommission || 0);
   }
 
   for (const e of stk) {
-    const s = String(e.Symbol || "").toUpperCase();
-    if (!s || s === "USD.CAD") continue;
+    const symbol = String(e.Symbol || "").toUpperCase();
+    if (!symbol || symbol === "USD.CAD") continue;
 
-    const a = ensure(s);
-    const qty = Math.abs(Number(e.Quantity || 0));
-    const proceeds = Math.abs(Number(e.Proceeds || 0));
+    const p = ensure(symbol);
+    const qtySigned = Number(e.Quantity || 0);
+    if (!qtySigned) continue;
 
-    if (String(e.BuySell) === "BUY") {
-      a.netQty += qty;
-      a.buyCost += proceeds;
-      if (assignedBuyTradeIDs.has(String(e.TradeID || ""))) {
-        a.anyAssignedBuy = true;
-      }
-    } else if (String(e.BuySell) === "SELL") {
-      a.netQty -= qty;
-      a.sellQty += qty;
-      a.sellProceeds += proceeds;
+    const isAssignedBuy = assignedBuyTradeIDs.has(String(e.TradeID || ""));
+
+    if (e.TradeDate && (!p.lastDate || e.TradeDate > p.lastDate)) {
+      p.lastDate = e.TradeDate;
     }
 
-    if (e.TradeDate && (!a.lastDate || e.TradeDate > a.lastDate)) {
-      a.lastDate = e.TradeDate;
+    // BUY
+    if (qtySigned > 0) {
+      const buyQty = qtySigned;
+      const cost = -cashflow(e); // compra = salida de efectivo positiva como costo
+
+      p.shares += buyQty;
+
+      if (method === "FIFO") {
+        p.lots.push({
+          qty: buyQty,
+          costPerShare: buyQty > 0 ? cost / buyQty : 0,
+          assigned: isAssignedBuy,
+        });
+        p.costBasis += cost;
+      } else {
+        p.costBasis += cost;
+        p.avgCost = p.shares > 0 ? p.costBasis / p.shares : 0;
+      }
+
+      if (isAssignedBuy) {
+        p.assignedLotsShares += buyQty;
+      }
+    }
+
+    // SELL
+    if (qtySigned < 0) {
+      const sellQty = Math.abs(qtySigned);
+      const proceedsNet = cashflow(e);
+
+      if (method === "FIFO") {
+        let remaining = sellQty;
+        let costRemoved = 0;
+
+        while (remaining > 0 && p.lots.length > 0) {
+          const lot = p.lots[0];
+          const take = Math.min(remaining, lot.qty);
+
+          costRemoved += take * lot.costPerShare;
+
+          if (lot.assigned) {
+            p.assignedLotsShares -= take;
+            if (p.assignedLotsShares < 0) p.assignedLotsShares = 0;
+          }
+
+          lot.qty -= take;
+          remaining -= take;
+
+          if (lot.qty <= 1e-9) {
+            p.lots.shift();
+          }
+        }
+
+        p.shares -= sellQty;
+        p.costBasis -= costRemoved;
+        p.realized += proceedsNet - costRemoved;
+      } else {
+        const costRemoved = sellQty * (p.avgCost || 0);
+
+        p.shares -= sellQty;
+        p.costBasis -= costRemoved;
+        p.realized += proceedsNet - costRemoved;
+        p.avgCost = p.shares > 0 ? p.costBasis / p.shares : 0;
+
+        // ajuste simple de assigned shares en AVG
+        if (p.assignedLotsShares > 0) {
+          p.assignedLotsShares = Math.max(0, p.assignedLotsShares - sellQty);
+        }
+      }
     }
   }
 
-  const rows: StockRow[] = Array.from(by.values())
+  const rows = Array.from(positions.values())
     .map((x) => {
-      const openQty = Math.max(Number(x.netQty || 0), 0);
-      const totalBoughtQty = Math.max(Number(x.netQty || 0), 0) + Number(x.sellQty || 0);
-
-      const costBasis =
-        totalBoughtQty > 0
-          ? (Number(x.buyCost || 0) / totalBoughtQty) * openQty
-          : 0;
-
+      const openQty = Math.max(Number(x.shares || 0), 0);
       const status: "OPEN" | "CLOSED" =
-        openQty > 0 ? "OPEN" : "CLOSED";
+        Math.abs(Number(x.shares || 0)) < 1e-9 ? "CLOSED" : "OPEN";
 
       let wheelStage: "STOCK" | "WHEEL_STOCK" | "CC_ACTIVE" = "STOCK";
-      if (status === "OPEN" && x.anyAssignedBuy) wheelStage = "WHEEL_STOCK";
+
+      if (status === "OPEN" && Number(x.assignedLotsShares || 0) > 0) {
+        wheelStage = "WHEEL_STOCK";
+      }
+
       if (
         status === "OPEN" &&
         ccActiveUnderlyings.has(String(x.symbol || "").toUpperCase())
@@ -314,19 +401,29 @@ export function computeStocks(
       return {
         symbol: String(x.symbol || "").toUpperCase(),
         netQty: openQty,
-        costBasis: Number(costBasis || 0),
+        costBasis: Number(x.costBasis || 0),
         status,
         lastDate: x.lastDate,
         wheelStage,
+        realized: Number(x.realized || 0),
+        avgCost: openQty > 0 ? Number(x.costBasis || 0) / openQty : 0,
       };
     })
+    .filter(
+      (r) =>
+        Math.abs(Number(r.netQty || 0)) > 1e-9 ||
+        Math.abs(Number((r as any).realized || 0)) > 1e-6
+    )
     .sort((a, b) => String(a.symbol || "").localeCompare(String(b.symbol || "")));
 
   const stockCapital = rows
     .filter((r) => r.status === "OPEN")
     .reduce((acc, r) => acc + Number(r.costBasis || 0), 0);
 
-  const totalRealized = 0;
+  const totalRealized = rows.reduce(
+    (acc, r) => acc + Number((r as any).realized || 0),
+    0
+  );
 
   return { rows, stockCapital, totalRealized, method };
 }
