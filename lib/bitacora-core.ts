@@ -44,7 +44,15 @@ export function monthKey(dateStr?: string) {
   if (Number.isNaN(d.getTime())) return "";
   return d.toLocaleDateString("en-US", { year: "numeric", month: "short" });
 }
+function sortMonthLabelsAsc(a: string, b: string) {
+  const da = new Date(`${a} 1`);
+  const db = new Date(`${b} 1`);
 
+  const ta = Number.isNaN(da.getTime()) ? 0 : da.getTime();
+  const tb = Number.isNaN(db.getTime()) ? 0 : db.getTime();
+
+  return ta - tb;
+}
 export function assignWheelTags(allExecs: Exec[]) {
   const ctx = buildWheelContext(allExecs);
 
@@ -118,7 +126,7 @@ export function monthlyIncomeStatement(
   const monthsSet = new Set(
     allExecs.map((e) => monthKey(e.TradeDate)).filter(Boolean)
   );
-  const months = Array.from(monthsSet).sort();
+  const months = Array.from(monthsSet).sort(sortMonthLabelsAsc);
 
   return months.map((mk) => {
     const slice = allExecs.filter((e) => monthKey(e.TradeDate) === mk);
