@@ -20,11 +20,7 @@ import { parseIbgCsv } from "../../lib/csv";
 import { fetchTrades, insertTrades } from "../../lib/trades";
 import { signOutUser } from "../../lib/auth";
 import type { Exec } from "../../lib/engine/types";
-import {
-  computeOptions,
-  computeStocks,
-  computeCapitalSnapshot,
-} from "../../lib/ibkr-engine";
+import { getDashboardModel } from "../../lib/bitacora-core";
 
 function fmtMoney(value: number) {
   return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
@@ -118,64 +114,62 @@ export default function DashboardPage() {
     }
   }
 
-  const optionsModel = useMemo(() => computeOptions(trades), [trades]);
-  const stocksModel = useMemo(() => computeStocks(trades), [trades]);
-  const capitalModel = useMemo(() => computeCapitalSnapshot(trades), [trades]);
+  const model = useMemo(() => getDashboardModel(trades), [trades]);
 
-  const premiumCollected = optionsModel.realizedTotal;
-  const stockCapital = capitalModel.stockCapital;
-  const cspCapitalAtRisk = capitalModel.cspRisk;
-  const totalCapitalDeployed = capitalModel.totalCapital;
+const premiumCollected = model.realizedPremium;
+const stockCapital = model.capital.stockCapital;
+const cspCapitalAtRisk = model.capital.cspCapitalOpen;
+const totalCapitalDeployed = model.totalCapital;
 
   const openShortPuts = useMemo(
     () =>
-      optionsModel.rows.filter(
+      model.options.rows.filter(
         (r) => r.status === "OPEN" && r.strategy === "CSP" && Number(r.netQty) < 0
       ),
-    [optionsModel]
+    [model.options]
   );
 
   const openCoveredCalls = useMemo(
     () =>
-      optionsModel.rows.filter(
+      model.options.rows.filter(
         (r) => r.status === "OPEN" && r.strategy === "CC" && Number(r.netQty) < 0
       ),
-    [optionsModel]
+    [model.options]
   );
 
   const expirationBuckets = useMemo(
     () => ({
-      d7: optionsModel.rows.filter((r) => {
+      d7: model.options.rows.filter((r) => {
         if (r.status !== "OPEN" || !r.expiry) return false;
         const d = daysUntil(r.expiry);
         return typeof d === "number" && d >= 0 && d <= 7;
       }).length,
 
-      d14: optionsModel.rows.filter((r) => {
+      d14: model.options.rows.filter((r) => {
         if (r.status !== "OPEN" || !r.expiry) return false;
         const d = daysUntil(r.expiry);
         return typeof d === "number" && d >= 0 && d <= 14;
       }).length,
 
-      d30: optionsModel.rows.filter((r) => {
+      d30: model.options.rows.filter((r) => {
         if (r.status !== "OPEN" || !r.expiry) return false;
         const d = daysUntil(r.expiry);
         return typeof d === "number" && d >= 0 && d <= 30;
       }).length,
 
-      d60: optionsModel.rows.filter((r) => {
+      d60: model.options.rows.filter((r) => {
         if (r.status !== "OPEN" || !r.expiry) return false;
         const d = daysUntil(r.expiry);
         return typeof d === "number" && d >= 0 && d <= 60;
       }).length,
 
-      d90: optionsModel.rows.filter((r) => {
+      d90: model.options.rows.filter((r) => {
         if (r.status !== "OPEN" || !r.expiry) return false;
         const d = daysUntil(r.expiry);
         return typeof d === "number" && d >= 0 && d <= 90;
       }).length,
     }),
-    [optionsModel]
+    [model.options]
   );
 
   const openWheelRows = useMemo(
@@ -202,7 +196,7 @@ export default function DashboardPage() {
         PremiumOrCost: Number(r.cashflow || 0),
       })),
 
-      ...stocksModel.rows
+      ...model.stocks.rows
         .filter((r) => r.status === "OPEN")
         .map((r) => ({
           id: `STK-${r.symbol}`,
@@ -220,21 +214,18 @@ export default function DashboardPage() {
           PremiumOrCost: -Math.abs(Number(r.costBasis || 0)),
         })),
     ],
-    [openShortPuts, openCoveredCalls, stocksModel]
+    [openShortPuts, openCoveredCalls, model.stocks]
   );
 
   const shortPutCount = openShortPuts.length;
   const coveredCallCount = openCoveredCalls.length;
 
-  const roiMonthly =
-    totalCapitalDeployed > 0
-      ? (premiumCollected / totalCapitalDeployed) * 100
-      : 0;
+  const roiMonthly = model.roi;
 
   const premiumPerMonth = useMemo(() => {
     const map = new Map<string, number>();
 
-    optionsModel.rows.forEach((row) => {
+    model.options.rows.forEach((row) => {
       if (!row.lastDate) return;
       const key = monthKey(row.lastDate);
       map.set(key, (map.get(key) || 0) + Number(row.realized || 0));
@@ -244,12 +235,12 @@ export default function DashboardPage() {
       month,
       premium: Number(premium.toFixed(2)),
     }));
-  }, [optionsModel]);
+  }, [model.options]);
 
   const premiumPerTicker = useMemo(() => {
     const map = new Map<string, number>();
 
-    optionsModel.rows.forEach((row) => {
+    model.options.rows.forEach((row) => {
       map.set(
         row.underlying,
         (map.get(row.underlying) || 0) + Number(row.realized || 0)
@@ -263,7 +254,7 @@ export default function DashboardPage() {
       }))
       .sort((a, b) => b.value - a.value)
       .slice(0, 8);
-  }, [optionsModel]);
+  }, [model.options]);
 
   if (loading) {
     return (
