@@ -1,7 +1,8 @@
-import { supabase } from "./supabase";
+import { getSupabase } from "./supabase";
 import type { Exec } from "./engine/types";
 
 async function getCurrentUserId() {
+  const supabase = getSupabase();
   const {
     data: { user },
     error,
@@ -57,6 +58,7 @@ function mapRowToExec(row: any): Exec {
 }
 
 export async function insertTrades(trades: Exec[]) {
+  const supabase = getSupabase();
   const userId = await getCurrentUserId();
   const rows = trades.map((trade) => mapExecToRow(trade, userId));
 
@@ -74,6 +76,7 @@ export async function insertTrades(trades: Exec[]) {
 }
 
 export async function insertTrade(trade: Exec) {
+  const supabase = getSupabase();
   const userId = await getCurrentUserId();
   const row = mapExecToRow(trade, userId);
 
@@ -92,6 +95,7 @@ export async function insertTrade(trade: Exec) {
 }
 
 export async function fetchTrades(): Promise<Exec[]> {
+  const supabase = getSupabase();
   const { data, error } = await supabase
     .from("trades")
     .select("*")
@@ -106,6 +110,7 @@ export async function fetchTrades(): Promise<Exec[]> {
 }
 
 export async function deleteAllMyTrades() {
+  const supabase = getSupabase();
   const userId = await getCurrentUserId();
 
   const { error } = await supabase
