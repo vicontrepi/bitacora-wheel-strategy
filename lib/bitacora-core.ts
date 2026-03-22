@@ -179,12 +179,12 @@ export function monthlyROI(
         ? endCap
         : getCapitalFields(capEnd.get(months[idx - 1]) || {});
 
-    const capStart = Number(prevCap.totalCapital || 0);
-    const capEndValue = Number(endCap.totalCapital || 0);
+    const capStart = Math.max(0, Number(prevCap.totalCapital || 0));
+    const capEndValue = Math.max(0, Number(endCap.totalCapital || 0));
     const capAvg = (capStart + capEndValue) / 2;
 
     const realized = Number(income[idx]?.total || 0);
-    const roi = capAvg > 0 ? (realized / capAvg) * 100 : 0;
+    const roi = capAvg > 0 ? realized / capAvg : 0;
 
     return {
       month: mk,

@@ -27,16 +27,24 @@ export type StockRow = {
 };
 
 function cf(e: Exec) {
-  return Number(e.Proceeds || 0) - Math.abs(Number(e.IBCommission || 0));
+  return Number(e.Proceeds || 0) + Number(e.IBCommission || 0);
+
 }
 
 function daysUntil(expiry?: string) {
   if (!expiry) return null;
+
+  const clean = String(expiry).trim();
+  if (!clean) return null;
+
   const now = new Date();
-  const d = new Date(expiry);
+  const d = new Date(`${clean}T00:00:00`);
+
+  if (Number.isNaN(d.getTime())) return null;
+
   now.setHours(0, 0, 0, 0);
-  d.setHours(0, 0, 0, 0);
-  return Math.round((d.getTime() - now.getTime()) / 86400000);
+
+  return Math.ceil((d.getTime() - now.getTime()) / 86400000);
 }
 
 function addDays(dateIso: string, n: number) {
@@ -127,9 +135,13 @@ export function computeOptions(allExecs: Exec[]) {
       let status: "OPEN" | "CLOSED" | "EXPIRED" =
         Math.abs(Number(x.netQty || 0)) < 1e-9 ? "CLOSED" : "OPEN";
 
-      const dte = daysUntil(x.expiry);
-      if (status === "OPEN" && x.expiry && dte != null && dte < 0) {
-        status = "EXPIRED";
+      const normalizedExpiry =
+      typeof x.expiry === "string" ? x.expiry.trim() : x.expiry;
+
+      const dte = daysUntil(normalizedExpiry);
+
+      if (status === "OPEN" && normalizedExpiry && dte != null && dte < 0) {
+      status = "EXPIRED";
       }
 
       const realized =
@@ -140,7 +152,7 @@ export function computeOptions(allExecs: Exec[]) {
       return {
         conid: String(x.conid || ""),
         underlying: String(x.underlying || "").toUpperCase(),
-        expiry: x.expiry,
+        expiry: normalizedExpiry,
         pc: x.pc,
         strike: x.strike,
         multiplier: Number(x.mult || 100),

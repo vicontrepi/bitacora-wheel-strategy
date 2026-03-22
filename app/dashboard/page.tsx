@@ -240,6 +240,13 @@ async function handleCsvImport(
             >
               Refresh
             </button>
+            
+            <a
+              href="/accounting"
+              className="rounded-xl border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
+            >
+              Accounting
+            </a>
 
             <a
               href="/stocks"
