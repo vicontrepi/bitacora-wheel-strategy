@@ -243,6 +243,8 @@ export function computeStocks(
   assignedBuyTradeIDs: Set<string> = new Set(),
   ccActiveUnderlyings: Set<string> = new Set()
 ) {
+  void method;
+
   const stk = allExecs.filter((e) => e.AssetClass === "STK");
   const by = new Map<string, any>();
 
@@ -253,6 +255,7 @@ export function computeStocks(
         symbol: k,
         netQty: 0,
         buyCost: 0,
+        sellQty: 0,
         sellProceeds: 0,
         lastDate: "",
         anyAssignedBuy: false,
@@ -277,6 +280,7 @@ export function computeStocks(
       }
     } else if (String(e.BuySell) === "SELL") {
       a.netQty -= qty;
+      a.sellQty += qty;
       a.sellProceeds += proceeds;
     }
 
@@ -287,8 +291,16 @@ export function computeStocks(
 
   const rows: StockRow[] = Array.from(by.values())
     .map((x) => {
+      const openQty = Math.max(Number(x.netQty || 0), 0);
+      const totalBoughtQty = Math.max(Number(x.netQty || 0), 0) + Number(x.sellQty || 0);
+
+      const costBasis =
+        totalBoughtQty > 0
+          ? (Number(x.buyCost || 0) / totalBoughtQty) * openQty
+          : 0;
+
       const status: "OPEN" | "CLOSED" =
-        Number(x.netQty || 0) > 0 ? "OPEN" : "CLOSED";
+        openQty > 0 ? "OPEN" : "CLOSED";
 
       let wheelStage: "STOCK" | "WHEEL_STOCK" | "CC_ACTIVE" = "STOCK";
       if (status === "OPEN" && x.anyAssignedBuy) wheelStage = "WHEEL_STOCK";
@@ -301,8 +313,8 @@ export function computeStocks(
 
       return {
         symbol: String(x.symbol || "").toUpperCase(),
-        netQty: Number(x.netQty || 0),
-        costBasis: Number(x.buyCost || 0),
+        netQty: openQty,
+        costBasis: Number(costBasis || 0),
         status,
         lastDate: x.lastDate,
         wheelStage,
@@ -342,7 +354,7 @@ export function computeCapitalSnapshot(
       byTicker.set(r.symbol, (byTicker.get(r.symbol) || 0) + Number(r.costBasis || 0));
     });
 
-  let cspRisk = 0;
+  let cspCapitalOpen = 0;
 
   opt.rows
     .filter((r) => r.status === "OPEN" && r.strategy === "CSP" && Number(r.netQty) < 0)
@@ -352,7 +364,7 @@ export function computeCapitalSnapshot(
         Number(r.multiplier || 100) *
         Number(r.strike || 0);
 
-      cspRisk += risk;
+      cspCapitalOpen += risk;
       byTicker.set(r.underlying, (byTicker.get(r.underlying) || 0) + risk);
     });
 
@@ -362,8 +374,9 @@ export function computeCapitalSnapshot(
 
   return {
     stockCapital: st.stockCapital,
-    cspRisk,
-    totalCapital: st.stockCapital + cspRisk,
+    cspCapitalOpen,
+    cspRisk: cspCapitalOpen,
+    totalCapital: st.stockCapital + cspCapitalOpen,
     byTickerRows,
   };
 }
