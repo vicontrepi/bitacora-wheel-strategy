@@ -439,6 +439,103 @@ export function computeStocks(
 
   return { rows, stockCapital, totalRealized, method };
 }
+const NON_WHEEL_UNDERLYINGS = new Set([
+  "SPX",
+  "XSP",
+  "RUT",
+  "NDX",
+  "VIX",
+  "VXN",
+  "RVX",
+]);
+
+function isWheelEligibleUnderlying(symbol?: string) {
+  const s = String(symbol || "").toUpperCase().trim();
+  if (!s) return false;
+  return !NON_WHEEL_UNDERLYINGS.has(s);
+}
+
+function getGroupKey(row: {
+  underlying?: string;
+  expiry?: string;
+}) {
+  return `${String(row.underlying || "").toUpperCase()}__${String(row.expiry || "")}`;
+}
+
+function getOpenOptionGroups(rows: OptionRow[]) {
+  const groups = new Map<string, OptionRow[]>();
+
+  rows
+    .filter((r) => r.status === "OPEN")
+    .forEach((r) => {
+      const key = getGroupKey(r);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(r);
+    });
+
+  return groups;
+}
+
+function getSpreadWidth(rows: OptionRow[], pc: "P" | "C") {
+  const sameSide = rows
+    .filter((r) => String(r.pc || "").toUpperCase() === pc)
+    .map((r) => Number(r.strike || 0))
+    .filter((n) => Number.isFinite(n));
+
+  if (sameSide.length < 2) return 0;
+
+  const minStrike = Math.min(...sameSide);
+  const maxStrike = Math.max(...sameSide);
+
+  return Math.abs(maxStrike - minStrike);
+}
+
+function classifyOpenOptionGroup(rows: OptionRow[]) {
+  const puts = rows.filter((r) => String(r.pc || "").toUpperCase() === "P");
+  const calls = rows.filter((r) => String(r.pc || "").toUpperCase() === "C");
+
+  const shortPuts = puts.filter((r) => Number(r.netQty || 0) < 0);
+  const longPuts = puts.filter((r) => Number(r.netQty || 0) > 0);
+
+  const shortCalls = calls.filter((r) => Number(r.netQty || 0) < 0);
+  const longCalls = calls.filter((r) => Number(r.netQty || 0) > 0);
+
+  if (
+    shortPuts.length === 1 &&
+    longPuts.length === 1 &&
+    shortCalls.length === 1 &&
+    longCalls.length === 1
+  ) {
+    return "IRON_CONDOR";
+  }
+
+  if (shortPuts.length === 1 && longPuts.length === 1 && calls.length === 0) {
+    return "PUT_CREDIT_SPREAD";
+  }
+
+  if (shortCalls.length === 1 && longCalls.length === 1 && puts.length === 0) {
+    return "CALL_CREDIT_SPREAD";
+  }
+
+  if (
+    shortPuts.length === 1 &&
+    longPuts.length === 0 &&
+    calls.length === 0 &&
+    isWheelEligibleUnderlying(shortPuts[0]?.underlying)
+  ) {
+    return "CSP";
+  }
+
+  if (
+    shortCalls.length === 1 &&
+    longCalls.length === 0 &&
+    puts.length === 0
+  ) {
+    return "CC";
+  }
+
+  return "OPT_OTHER";
+}
 
 export function computeCapitalSnapshot(
   allExecs: Exec[],
@@ -452,7 +549,9 @@ export function computeCapitalSnapshot(
     assignedBuyTradeIDs,
     ccActiveUnderlyings
   );
+
   const opt = computeOptions(allExecs);
+  const openOptionGroups = getOpenOptionGroups(opt.rows);
 
   const byTicker = new Map<string, number>();
 
@@ -460,22 +559,89 @@ export function computeCapitalSnapshot(
     .filter((r) => r.status === "OPEN")
     .forEach((r) => {
       if (r.symbol === "USD.CAD") return;
-      byTicker.set(r.symbol, (byTicker.get(r.symbol) || 0) + Number(r.costBasis || 0));
+      byTicker.set(
+        r.symbol,
+        (byTicker.get(r.symbol) || 0) + Number(r.costBasis || 0)
+      );
     });
 
   let cspCapitalOpen = 0;
+  let spreadMarginOpen = 0;
 
-  opt.rows
-    .filter((r) => r.status === "OPEN" && r.strategy === "CSP" && Number(r.netQty) < 0)
-    .forEach((r) => {
-      const risk =
-        Math.abs(Number(r.netQty || 0)) *
-        Number(r.multiplier || 100) *
-        Number(r.strike || 0);
+  openOptionGroups.forEach((groupRows: OptionRow[]) => {
+    if (!groupRows.length) return;
+
+    const strategy = classifyOpenOptionGroup(groupRows);
+    const underlying = String(groupRows[0]?.underlying || "").toUpperCase();
+    const multiplier = Number(groupRows[0]?.multiplier || 100);
+
+    if (strategy === "CSP") {
+      if (!isWheelEligibleUnderlying(underlying)) return;
+
+      const shortPut = groupRows.find(
+        (r: OptionRow) =>
+          String(r.pc || "").toUpperCase() === "P" &&
+          Number(r.netQty || 0) < 0
+      );
+
+      if (!shortPut) return;
+
+      const contracts = Math.abs(Number(shortPut.netQty || 0));
+      const strike = Number(shortPut.strike || 0);
+      const risk = contracts * strike * multiplier;
 
       cspCapitalOpen += risk;
-      byTicker.set(r.underlying, (byTicker.get(r.underlying) || 0) + risk);
-    });
+      byTicker.set(underlying, (byTicker.get(underlying) || 0) + risk);
+      return;
+    }
+
+    if (strategy === "PUT_CREDIT_SPREAD") {
+      const shortPut = groupRows.find(
+        (r: OptionRow) =>
+          String(r.pc || "").toUpperCase() === "P" &&
+          Number(r.netQty || 0) < 0
+      );
+      if (!shortPut) return;
+
+      const contracts = Math.abs(Number(shortPut.netQty || 0));
+      const width = getSpreadWidth(groupRows, "P");
+      const risk = width * multiplier * contracts;
+
+      spreadMarginOpen += risk;
+      byTicker.set(underlying, (byTicker.get(underlying) || 0) + risk);
+      return;
+    }
+
+    if (strategy === "CALL_CREDIT_SPREAD") {
+      const shortCall = groupRows.find(
+        (r: OptionRow) =>
+          String(r.pc || "").toUpperCase() === "C" &&
+          Number(r.netQty || 0) < 0
+      );
+      if (!shortCall) return;
+
+      const contracts = Math.abs(Number(shortCall.netQty || 0));
+      const width = getSpreadWidth(groupRows, "C");
+      const risk = width * multiplier * contracts;
+
+      spreadMarginOpen += risk;
+      byTicker.set(underlying, (byTicker.get(underlying) || 0) + risk);
+      return;
+    }
+
+    if (strategy === "IRON_CONDOR") {
+      const shortAny = groupRows.find((r: OptionRow) => Number(r.netQty || 0) < 0);
+      const contracts = Math.abs(Number(shortAny?.netQty || 0));
+      const putWidth = getSpreadWidth(groupRows, "P");
+      const callWidth = getSpreadWidth(groupRows, "C");
+      const width = Math.max(putWidth, callWidth);
+      const risk = width * multiplier * contracts;
+
+      spreadMarginOpen += risk;
+      byTicker.set(underlying, (byTicker.get(underlying) || 0) + risk);
+      return;
+    }
+  });
 
   const byTickerRows = Array.from(byTicker.entries())
     .map(([ticker, capital]) => ({ ticker, capital }))
@@ -485,7 +651,8 @@ export function computeCapitalSnapshot(
     stockCapital: st.stockCapital,
     cspCapitalOpen,
     cspRisk: cspCapitalOpen,
-    totalCapital: st.stockCapital + cspCapitalOpen,
+    spreadMarginOpen,
+    totalCapital: st.stockCapital + cspCapitalOpen + spreadMarginOpen,
     byTickerRows,
   };
 }

@@ -14,6 +14,7 @@ export type PrefLike = {
 
 type CapitalSnapshotLike = {
   cspCapitalOpen?: number;
+  spreadMarginOpen?: number;
   stockCapital?: number;
   totalCapital?: number;
 };
@@ -84,15 +85,17 @@ export function assignWheelTags(allExecs: Exec[]) {
 
 function getCapitalFields(cap: CapitalSnapshotLike) {
   const cspCapitalOpen = Number(cap?.cspCapitalOpen || 0);
+  const spreadMarginOpen = Number(cap?.spreadMarginOpen || 0);
   const stockCapital = Number(cap?.stockCapital || 0);
 
   const totalCapital =
-    cspCapitalOpen + stockCapital > 0
-      ? cspCapitalOpen + stockCapital
+    cspCapitalOpen + spreadMarginOpen + stockCapital > 0
+      ? cspCapitalOpen + spreadMarginOpen + stockCapital
       : Number(cap?.totalCapital || 0);
 
   return {
     cspCapitalOpen,
+    spreadMarginOpen,
     stockCapital,
     totalCapital,
   };
