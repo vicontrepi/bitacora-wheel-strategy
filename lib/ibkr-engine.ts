@@ -15,6 +15,8 @@ export type OptionRow = {
   strategy: string;
   soldQty: number;
   boughtQty: number;
+  premiumPerShare?: number;
+  breakEven?: number | null;
 };
 
 export type StockRow = {
@@ -149,6 +151,25 @@ export function computeOptions(allExecs: Exec[]) {
           ? Number(x.cashflow || 0)
           : 0;
 
+      const contracts = Math.abs(Number(x.netQty || 0));
+      const multiplier = Number(x.mult || 100);
+      const totalUnits = contracts * multiplier;
+
+      const premiumPerShare =
+      totalUnits > 0 ? Math.abs(Number(x.cashflow || 0)) / totalUnits : 0;
+
+      let breakEven: number | null = null;
+
+      if (x.strike != null) {
+      const strike = Number(x.strike || 0);
+      const pcUpper = String(x.pc || "").toUpperCase();
+
+      if (pcUpper === "P") {
+      breakEven = strike - premiumPerShare;
+      } else if (pcUpper === "C") {
+      breakEven = strike + premiumPerShare;
+      }
+      }    
       return {
         conid: String(x.conid || ""),
         underlying: String(x.underlying || "").toUpperCase(),
@@ -164,6 +185,8 @@ export function computeOptions(allExecs: Exec[]) {
         strategy: strat,
         soldQty: Number(x.soldQty || 0),
         boughtQty: Number(x.boughtQty || 0),
+        premiumPerShare,
+        breakEven,
       };
     })
     .sort(
