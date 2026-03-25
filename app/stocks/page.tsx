@@ -88,9 +88,7 @@ export default function StocksPage() {
                 await signOutUser();
                 router.push("/login");
               }}
-              className="btn"
-            >
-              Logout
+              className="btn">Logout
             </button>
           </div>
         </div>

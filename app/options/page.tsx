@@ -440,6 +440,8 @@ export default function OptionsPage() {
                   <th className="px-3 py-2 text-left">P/C</th>
                   <th className="px-3 py-2 text-left">Strike</th>
                   <th className="px-3 py-2 text-left">BE</th>
+                  <th className="px-3 py-2 text-left">BE Low</th>
+                  <th className="px-3 py-2 text-left">BE High</th>
                   <th className="px-3 py-2 text-left">Premium/Share</th> 
                   <th className="px-3 py-2 text-left">Mult</th>
                   <th className="px-3 py-2 text-left">Strategy</th>
@@ -470,13 +472,13 @@ export default function OptionsPage() {
                       >
                         <td className="px-3 py-2">{row.underlying}</td>
                         <td className="px-3 py-2">{row.expiry || "-"}</td>
-                        <td className="px-3 py-2">
-                          {typeof dte === "number" ? dte : "-"}
-                        </td>
+                        <td className="px-3 py-2">{typeof dte === "number" ? dte : "-"}</td>
                         <td className="px-3 py-2">{row.pc || "-"}</td>
                         <td className="px-3 py-2">{row.strike ?? "-"}</td>
                         <td className="px-3 py-2">{row.breakEven != null ? `$${money(Number(row.breakEven || 0))}` : "-"}</td>
-                        <td className="px-3 py-2">{row.premiumPerShare != null? `$${money(Number(row.premiumPerShare || 0))}`: "-"}</td>
+                        <td className="px-3 py-2">{row.premiumPerShare != null? `$${money(Number(row.premiumPerShare || 0))}`: "-"}</td>  
+                        <td className="px-3 py-2">{row.structureBreakEvenLow != null? `$${money(Number(row.structureBreakEvenLow || 0))}`: "-"}</td>
+                        <td className="px-3 py-2">{row.structureBreakEvenHigh != null? `$${money(Number(row.structureBreakEvenHigh || 0))}`: "-"}</td>    
                         <td className="px-3 py-2">{row.multiplier}</td>
                         <td className="px-3 py-2">{row.strategy}</td>
                         <td className="px-3 py-2">{row.netQty}</td>

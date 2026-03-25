@@ -17,6 +17,8 @@ export type OptionRow = {
   boughtQty: number;
   premiumPerShare?: number;
   breakEven?: number | null;
+  structureBreakEvenLow?: number | null;
+  structureBreakEvenHigh?: number | null;
 };
 
 export type StockRow = {
@@ -187,6 +189,8 @@ export function computeOptions(allExecs: Exec[]) {
         boughtQty: Number(x.boughtQty || 0),
         premiumPerShare,
         breakEven,
+        structureBreakEvenLow: null,
+        structureBreakEvenHigh: null,
       };
     })
     .sort(
@@ -194,6 +198,24 @@ export function computeOptions(allExecs: Exec[]) {
         String(b.lastDate || "").localeCompare(String(a.lastDate || "")) ||
         String(a.underlying || "").localeCompare(String(b.underlying || ""))
     );
+const groups = getOpenOptionGroups(rows);
+
+groups.forEach((groupRows) => {
+  const be = getStructureBreakEvens(groupRows);
+
+  groupRows.forEach((row) => {
+    row.structureBreakEvenLow = be.structureBreakEvenLow;
+    row.structureBreakEvenHigh = be.structureBreakEvenHigh;
+
+    if (be.structure === "PUT_CREDIT_SPREAD") {
+      row.strategy = "PUT_CREDIT_SPREAD";
+    } else if (be.structure === "CALL_CREDIT_SPREAD") {
+      row.strategy = "CALL_CREDIT_SPREAD";
+    } else if (be.structure === "IRON_CONDOR") {
+      row.strategy = "IRON_CONDOR";
+    }
+  });
+});
 
   const realizedTotal = rows.reduce((acc, r) => acc + Number(r.realized || 0), 0);
   const openCount = rows.filter((r) => r.status === "OPEN").length;
@@ -559,7 +581,60 @@ function classifyOpenOptionGroup(rows: OptionRow[]) {
 
   return "OPT_OTHER";
 }
+function getGroupNetCreditPerShare(rows: OptionRow[]) {
+  const shortContracts = rows
+    .filter((r) => Number(r.netQty || 0) < 0)
+    .reduce((acc, r) => acc + Math.abs(Number(r.netQty || 0)), 0);
 
+  const multiplier = Number(rows[0]?.multiplier || 100);
+  const totalUnits = shortContracts * multiplier;
+
+  if (totalUnits <= 0) return 0;
+
+  return Math.abs(
+    rows.reduce((acc, r) => acc + Number(r.cashflow || 0), 0)
+  ) / totalUnits;
+}
+
+function getStructureBreakEvens(rows: OptionRow[]) {
+  const strategy = classifyOpenOptionGroup(rows);
+  const creditPerShare = getGroupNetCreditPerShare(rows);
+
+  const puts = rows
+    .filter((r) => String(r.pc || "").toUpperCase() === "P")
+    .map((r) => Number(r.strike || 0));
+
+  const calls = rows
+    .filter((r) => String(r.pc || "").toUpperCase() === "C")
+    .map((r) => Number(r.strike || 0));
+
+  let low: number | null = null;
+  let high: number | null = null;
+
+  if (strategy === "PUT_CREDIT_SPREAD") {
+    const shortPutStrike = Math.max(...puts);
+    low = shortPutStrike - creditPerShare;
+  }
+
+  if (strategy === "CALL_CREDIT_SPREAD") {
+    const shortCallStrike = Math.min(...calls);
+    high = shortCallStrike + creditPerShare;
+  }
+
+  if (strategy === "IRON_CONDOR") {
+    const shortPutStrike = Math.max(...puts);
+    const shortCallStrike = Math.min(...calls);
+
+    low = shortPutStrike - creditPerShare;
+    high = shortCallStrike + creditPerShare;
+  }
+
+  return {
+    structure: strategy,
+    structureBreakEvenLow: low,
+    structureBreakEvenHigh: high,
+  };
+}
 export function computeCapitalSnapshot(
   allExecs: Exec[],
   method: "FIFO" | "AVG" = "FIFO",
