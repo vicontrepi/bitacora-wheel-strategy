@@ -217,6 +217,15 @@ groups.forEach((groupRows) => {
   });
 });
 
+const optionGroups = getOpenOptionGroups(rows);
+
+optionGroups.forEach((groupRows) => {
+  const structure = classifyOpenOptionGroup(groupRows);
+
+  groupRows.forEach((row) => {
+    row.strategy = structure;
+  });
+});
   const realizedTotal = rows.reduce((acc, r) => acc + Number(r.realized || 0), 0);
   const openCount = rows.filter((r) => r.status === "OPEN").length;
 

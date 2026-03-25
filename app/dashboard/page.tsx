@@ -118,6 +118,15 @@ async function handleCsvImport(
   const shortPutCount = model.openShortPuts.length;
   const coveredCallCount = model.openCoveredCalls.length;
 
+  const ironCondorsOpen = model.options.rows.filter((r) => r.status === "OPEN" && r.strategy === "IRON_CONDOR").length;
+
+  const putCreditSpreadsOpen = model.options.rows.filter((r) => r.status === "OPEN" && r.strategy === "PUT_CREDIT_SPREAD").length;
+
+  const callCreditSpreadsOpen = model.options.rows.filter((r) => r.status === "OPEN" && r.strategy === "CALL_CREDIT_SPREAD").length;
+
+  const spreadMargin = Number(model.capital?.spreadMarginOpen || 0);
+  const wheelCapital = Number(model.capital?.cspCapitalOpen || 0);
+
   const openWheelRows = useMemo(() => {
     return model.options.rows
       .filter((r) => r.status === "OPEN")
@@ -296,7 +305,7 @@ async function handleCsvImport(
         </div>
 
         <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
-          <StatCard title="Capital CSP (cash-secured)" value={`$${fmtMoney(cspCapitalAtRisk)}`} tone="amber" />
+          <StatCard title="Wheel Capital" value={`$${fmtMoney(cspCapitalAtRisk)}`} tone="amber" />
           <StatCard title="Capital Stocks (cost basis)" value={`$${fmtMoney(stockCapital)}`} tone="default" />
           <StatCard title="Capital total (aprox)" value={`$${fmtMoney(totalCapitalDeployed)}`} tone="indigo" />
         </div>
@@ -308,7 +317,21 @@ async function handleCsvImport(
           <StatCard title="Open Covered Calls" value={coveredCallCount} tone="indigo" />
         </div>
 
-        <div className="mt-8 grid grid-cols-2 gap-4 md:grid-cols-5">
+        <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-5">
+          <StatCard title="Wheel Capital"value={`$${fmtMoney(wheelCapital)}`}tone="amber"/>
+          <StatCard title="Spread Margin"value={`$${fmtMoney(spreadMargin)}`}tone="indigo"/>
+          <StatCard title="Iron Condors Open"value={ironCondorsOpen}tone="indigo"/>
+          <StatCard title="Put Credit Spreads"value={putCreditSpreadsOpen}tone="green"/>
+          <StatCard title="Call Credit Spreads"value={callCreditSpreadsOpen}tone="default"/>
+          </div>
+
+        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+          <StatCard title="Wheel % of Total"value={totalCapitalDeployed > 0? `${((wheelCapital / totalCapitalDeployed) * 100).toFixed(1)}%`: "0.0%"}tone="amber"/>
+          <StatCard title="Spreads % of Total"value={totalCapitalDeployed > 0? `${((spreadMargin / totalCapitalDeployed) * 100).toFixed(1)}%`: "0.0%"}tone="indigo"/>
+          <StatCard title="Wheel + Spreads"value={`$${fmtMoney(wheelCapital + spreadMargin)}`}tone="default"/>
+          </div>  
+
+          <div className="mt-8 grid grid-cols-2 gap-4 md:grid-cols-5">
           <ExpirationCard title="7 Days" count={expirationBuckets.d7} />
           <ExpirationCard title="14 Days" count={expirationBuckets.d14} />
           <ExpirationCard title="30 Days" count={expirationBuckets.d30} />
@@ -376,6 +399,42 @@ async function handleCsvImport(
           </ChartCard>
         </div>
 
+<div className="mt-10 rounded-2xl border border-slate-800 bg-slate-900 p-6">
+  <h2 className="mb-4 text-lg font-semibold">Open Positions by Strategy</h2>
+
+  <div className="overflow-x-auto">
+    <table className="min-w-full text-sm">
+      <thead className="border-b border-slate-800 text-slate-400">
+        <tr>
+          <th className="px-3 py-2 text-left">Strategy</th>
+          <th className="px-3 py-2 text-left">Open Count</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr className="border-b border-slate-800">
+          <td className="px-3 py-2">CSP</td>
+          <td className="px-3 py-2">{shortPutCount}</td>
+        </tr>
+        <tr className="border-b border-slate-800">
+          <td className="px-3 py-2">CC</td>
+          <td className="px-3 py-2">{coveredCallCount}</td>
+        </tr>
+        <tr className="border-b border-slate-800">
+          <td className="px-3 py-2">IRON_CONDOR</td>
+          <td className="px-3 py-2">{ironCondorsOpen}</td>
+        </tr>
+        <tr className="border-b border-slate-800">
+          <td className="px-3 py-2">PUT_CREDIT_SPREAD</td>
+          <td className="px-3 py-2">{putCreditSpreadsOpen}</td>
+        </tr>
+        <tr className="border-b border-slate-800">
+          <td className="px-3 py-2">CALL_CREDIT_SPREAD</td>
+          <td className="px-3 py-2">{callCreditSpreadsOpen}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
         <div className="mt-10 rounded-2xl border border-slate-800 bg-slate-900 p-6">
           <h2 className="mb-4 text-lg font-semibold">Open Wheel Positions</h2>
 

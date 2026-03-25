@@ -190,6 +190,18 @@ export default function OptionsPage() {
     [optionsModel]
   );
 
+  const strategyOptions = useMemo(() => {
+  const values = Array.from(
+    new Set(
+      optionsModel.rows
+        .map((r) => String(r.strategy || "").trim())
+        .filter(Boolean)
+    )
+  ).sort();
+
+  return ["ALL", ...values];
+}, [optionsModel]);
+
   async function handleSaveManualTrade() {
     try {
       const qtyAbs = Math.abs(Number(manualForm.quantity || 0));
@@ -385,12 +397,11 @@ export default function OptionsPage() {
                 onChange={(e) => setStrategy(e.target.value)}
                 className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm"
               >
-                <option value="ALL">All</option>
-                <option value="CSP">CSP</option>
-                <option value="CC">CC</option>
-                <option value="BTC_PUT">BTC_PUT</option>
-                <option value="BTC_CALL">BTC_CALL</option>
-                <option value="OPT_OTHER">OPT_OTHER</option>
+                {strategyOptions.map((value) => (
+                <option key={value} value={value}>
+                {value}
+                </option>
+                ))}
               </select>
             </div>
 
