@@ -144,6 +144,7 @@ export default function StocksPage() {
                 <th>Realized</th>
                 <th>Stage</th>
                 <th>Status</th>
+                <th className="px-3 py-2 text-left">Actions</th>
               </tr>
             </thead>
 
@@ -159,6 +160,8 @@ export default function StocksPage() {
                   </td>
                   <td>{r.wheelStage}</td>
                   <td>{r.status}</td>
+                  <td className="px-3 py-2"><a href={`/ticker?ticker=$ {row.symbol}`} className="rounded-lg border border-slate-700 px-3 py-1 text-xs hover:bg-slate-800"> Open
+                  </a> </td>
                 </tr>
               ))}
             </tbody>

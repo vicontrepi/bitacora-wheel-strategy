@@ -270,6 +270,12 @@ async function handleCsvImport(
             >
               Options Journal
             </a>
+            <a
+              href="/ticker"
+              className="rounded-xl border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
+            >
+              Ticker Dashboard
+            </a>
 
             <a
               href="/raw"
@@ -434,7 +440,8 @@ async function handleCsvImport(
       </tbody>
     </table>
   </div>
-</div>
+</div>ch
+
         <div className="mt-10 rounded-2xl border border-slate-800 bg-slate-900 p-6">
           <h2 className="mb-4 text-lg font-semibold">Open Wheel Positions</h2>
 

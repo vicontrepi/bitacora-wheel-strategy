@@ -14,7 +14,6 @@ export type PrefLike = {
 
 type CapitalSnapshotLike = {
   cspCapitalOpen?: number;
-  spreadMarginOpen?: number;
   stockCapital?: number;
   totalCapital?: number;
 };
@@ -28,32 +27,13 @@ type OptionRowLike = {
   credit?: number;
 };
 
-function isoDate(d: Date) {
-  return d.toISOString().slice(0, 10);
-}
-
-function endOfMonthISO(monthLabel: string) {
-  const d = new Date(`${monthLabel} 1`);
-  if (Number.isNaN(d.getTime())) return "";
-  const end = new Date(d.getFullYear(), d.getMonth() + 1, 0);
-  return isoDate(end);
-}
-
 export function monthKey(dateStr?: string) {
   if (!dateStr) return "";
   const d = new Date(dateStr);
   if (Number.isNaN(d.getTime())) return "";
   return d.toLocaleDateString("en-US", { year: "numeric", month: "short" });
 }
-function sortMonthLabelsAsc(a: string, b: string) {
-  const da = new Date(`${a} 1`);
-  const db = new Date(`${b} 1`);
 
-  const ta = Number.isNaN(da.getTime()) ? 0 : da.getTime();
-  const tb = Number.isNaN(db.getTime()) ? 0 : db.getTime();
-
-  return ta - tb;
-}
 export function assignWheelTags(allExecs: Exec[]) {
   const ctx = buildWheelContext(allExecs);
 
@@ -85,17 +65,15 @@ export function assignWheelTags(allExecs: Exec[]) {
 
 function getCapitalFields(cap: CapitalSnapshotLike) {
   const cspCapitalOpen = Number(cap?.cspCapitalOpen || 0);
-  const spreadMarginOpen = Number(cap?.spreadMarginOpen || 0);
   const stockCapital = Number(cap?.stockCapital || 0);
 
   const totalCapital =
-    cspCapitalOpen + spreadMarginOpen + stockCapital > 0
-      ? cspCapitalOpen + spreadMarginOpen + stockCapital
+    cspCapitalOpen + stockCapital > 0
+      ? cspCapitalOpen + stockCapital
       : Number(cap?.totalCapital || 0);
 
   return {
     cspCapitalOpen,
-    spreadMarginOpen,
     stockCapital,
     totalCapital,
   };
@@ -129,18 +107,16 @@ export function monthlyIncomeStatement(
   const monthsSet = new Set(
     allExecs.map((e) => monthKey(e.TradeDate)).filter(Boolean)
   );
-  const months = Array.from(monthsSet).sort(sortMonthLabelsAsc);
+  const months = Array.from(monthsSet).sort();
 
   return months.map((mk) => {
     const slice = allExecs.filter((e) => monthKey(e.TradeDate) === mk);
-
     const st = computeStocks(
       slice,
       method,
       ctx.assignedBuyTradeIDs,
       ctx.ccActiveUnderlyings
     );
-
     const op = computeOptions(slice);
 
     const stocksRealized = Number(st?.totalRealized || 0);
@@ -168,67 +144,302 @@ export function capitalSnapshot(
   );
 }
 
-export function monthlyROI(
-  allExecs: Exec[],
-  method: StockMethod = "FIFO"
-) {
+export function monthlyROI(allExecs: Exec[], method: StockMethod = "FIFO") {
   const income = monthlyIncomeStatement(allExecs, method);
   const months = income.map((r) => r.month);
 
-  const capEnd = new Map<string, CapitalSnapshotLike>();
-
-  months.forEach((mk) => {
-    const eom = endOfMonthISO(mk);
-    const upTo = allExecs.filter((e) => e.TradeDate && e.TradeDate <= eom);
-    capEnd.set(mk, capitalSnapshot(upTo, method));
-  });
-
   return months.map((mk, idx) => {
-    const endCap = getCapitalFields(capEnd.get(mk) || {});
-    const prevCap =
-      idx === 0
-        ? endCap
-        : getCapitalFields(capEnd.get(months[idx - 1]) || {});
+    const monthExecs = allExecs.filter((e) => monthKey(e.TradeDate) <= mk);
+    const capRaw = capitalSnapshot(monthExecs, method);
+    const cap = getCapitalFields(capRaw);
 
-    const capStart = Math.max(0, Number(prevCap.totalCapital || 0));
-    const capEndValue = Math.max(0, Number(endCap.totalCapital || 0));
-    const capAvg = (capStart + capEndValue) / 2;
-
-    const realized = Number(income[idx]?.total || 0);
-    const roi = capAvg > 0 ? realized / capAvg : 0;
+    const monthIncome = Number(income[idx]?.total || 0);
+    const capitalBase = cap.totalCapital;
 
     return {
       month: mk,
-      realized,
-      capStart,
-      capEnd: capEndValue,
-      capAvg,
-      roi,
+      income: monthIncome,
+      capital: capitalBase,
+      roi: capitalBase > 0 ? (monthIncome / capitalBase) * 100 : 0,
     };
   });
+}
+
+function normalizeSymbol(value?: string) {
+  return String(value || "").trim().toUpperCase();
+}
+
+function execSortAsc(a: Exec, b: Exec) {
+  return (
+    String(a.TradeDate || "").localeCompare(String(b.TradeDate || "")) ||
+    String(a.TradeID || "").localeCompare(String(b.TradeID || ""))
+  );
+}
+
+function tradeNetCash(e: Exec) {
+  return Number(e.Proceeds || 0) - Math.abs(Number(e.IBCommission || 0));
+}
+
+function getSignedShareDelta(e: Exec) {
+  if (e.AssetClass !== "STK") return 0;
+  return Number(e.Quantity || 0);
+}
+
+function getTickerFromExec(e: Exec) {
+  if (e.AssetClass === "OPT") {
+    return normalizeSymbol(e.UnderlyingSymbol || e.Symbol);
+  }
+  return normalizeSymbol(e.Symbol);
+}
+
+function getEventLabel(e: Exec) {
+  if (e.AssetClass === "STK") {
+    if (e.WheelTag === "ASSIGNED_BUY") return "Assigned stock buy";
+    if (e.WheelTag === "ASSIGNED_SELL") return "Called away / assigned sell";
+    return String(e.BuySell || "") === "BUY" ? "Stock buy" : "Stock sell";
+  }
+
+  const pc = String(e.PutCall || "").toUpperCase();
+  const buySell = String(e.BuySell || "").toUpperCase();
+
+  if (buySell === "SELL" && pc === "P") return "Sell put";
+  if (buySell === "BUY" && pc === "P") return "Buy put";
+  if (buySell === "SELL" && pc === "C") return "Sell call";
+  if (buySell === "BUY" && pc === "C") return "Buy call";
+
+  return "Option trade";
+}
+
+function getOptionFamilyKey(e: Exec) {
+  return [
+    normalizeSymbol(e.UnderlyingSymbol || e.Symbol),
+    String(e.Conid || ""),
+    String(e.Expiry || ""),
+    String(e.PutCall || ""),
+    Number(e.Strike || 0),
+    Number(e.Multiplier || 100),
+  ].join("|");
+}
+
+export function getTickerDashboardModel(
+  execs: Exec[],
+  selectedTicker: string,
+  pref?: PrefLike
+) {
+  const method: StockMethod = pref?.stockMethod === "AVG" ? "AVG" : "FIFO";
+  const ticker = normalizeSymbol(selectedTicker);
+
+  const ctx = assignWheelTags(execs);
+
+  const tickerExecs = execs
+    .filter((e) => getTickerFromExec(e) === ticker)
+    .slice()
+    .sort(execSortAsc);
+
+  const st = computeStocks(
+    tickerExecs,
+    method,
+    ctx.assignedBuyTradeIDs,
+    ctx.ccActiveUnderlyings
+  );
+  const op = computeOptions(tickerExecs);
+  const capRaw = computeCapitalSnapshot(
+    tickerExecs,
+    method,
+    ctx.assignedBuyTradeIDs,
+    ctx.ccActiveUnderlyings
+  );
+  const cap = getCapitalFields(capRaw);
+
+  const stockRow =
+    st.rows.find((r) => normalizeSymbol(r.symbol) === ticker) || null;
+
+  const stockExecs = tickerExecs.filter((e) => e.AssetClass === "STK");
+  const optionExecs = tickerExecs.filter((e) => e.AssetClass === "OPT");
+
+  const stockBuys = stockExecs.filter((e) => Number(e.Quantity || 0) > 0);
+  const stockSells = stockExecs.filter((e) => Number(e.Quantity || 0) < 0);
+
+  const optionPremiumAllTime = optionExecs.reduce(
+    (sum, e) => sum + tradeNetCash(e),
+    0
+  );
+
+  const stockRealized = Number(st.totalRealized || 0);
+  const optionRealized = Number(op.realizedTotal || 0);
+  const totalRealized = stockRealized + optionRealized;
+
+  const netSharesOpen = Number(stockRow?.netQty || 0);
+  const stockCostBasisOpen = Number(stockRow?.costBasis || 0);
+  const avgCostOpen =
+    netSharesOpen > 0 ? stockCostBasisOpen / netSharesOpen : 0;
+
+  const breakEvenStock =
+    netSharesOpen > 0 ? stockCostBasisOpen / netSharesOpen : null;
+
+  const breakEvenGlobal =
+    netSharesOpen > 0
+      ? (stockCostBasisOpen - optionPremiumAllTime) / netSharesOpen
+      : null;
+
+  const openOptions = op.rows.filter((r) => r.status === "OPEN");
+  const openShortPuts = openOptions.filter(
+    (r) => r.strategy === "CSP" && Number(r.netQty) < 0
+  );
+  const openCoveredCalls = openOptions.filter(
+    (r) => r.strategy === "CC" && Number(r.netQty) < 0
+  );
+
+  const wheelStage = stockRow?.wheelStage || "NO_OPEN_STOCK";
+
+  const optionAggByKey = new Map(
+    op.rows.map((row) => [
+      [
+        normalizeSymbol(row.underlying),
+        String(row.conid || ""),
+        String(row.expiry || ""),
+        String(row.pc || ""),
+        Number(row.strike || 0),
+        Number(row.multiplier || 100),
+      ].join("|"),
+      row,
+    ])
+  );
+
+  let runningShares = 0;
+  let runningOptionPremium = 0;
+
+  const timeline = tickerExecs.map((e) => {
+    const isStock = e.AssetClass === "STK";
+    const netCash = tradeNetCash(e);
+    const shareDelta = getSignedShareDelta(e);
+
+    if (isStock) runningShares += shareDelta;
+    else runningOptionPremium += netCash;
+
+    const familyKey = isStock ? "" : getOptionFamilyKey(e);
+    const optionRow = !isStock ? optionAggByKey.get(familyKey) : null;
+
+    return {
+      id: String(e.TradeID || `${e.TradeDate}-${Math.random()}`),
+      tradeDate: e.TradeDate || "",
+      symbol: ticker,
+      assetClass: e.AssetClass,
+      event: getEventLabel(e),
+      side: e.BuySell || "",
+      quantity: Number(e.Quantity || 0),
+      absQuantity: Math.abs(Number(e.Quantity || 0)),
+      tradePrice: Number(e.TradePrice || 0),
+      proceeds: Number(e.Proceeds || 0),
+      commission: Number(e.IBCommission || 0),
+      netCash,
+      expiry: e.Expiry || "",
+      strike: e.Strike ?? null,
+      putCall: e.PutCall || "",
+      wheelTag: e.WheelTag || "",
+      shareDelta,
+      runningShares,
+      runningOptionPremium,
+      optionStatus: optionRow?.status || "",
+      optionStrategy: optionRow?.strategy || "",
+    };
+  });
+
+  const monthlyPremiumMap = new Map<string, number>();
+  optionExecs.forEach((e) => {
+    const mk = monthKey(e.TradeDate);
+    if (!mk) return;
+    monthlyPremiumMap.set(mk, (monthlyPremiumMap.get(mk) || 0) + tradeNetCash(e));
+  });
+
+  const premiumByMonth = Array.from(monthlyPremiumMap.entries()).map(
+    ([month, premium]) => ({
+      month,
+      premium: Number(premium.toFixed(2)),
+    })
+  );
+
+  const cumulativePnlMap = new Map<string, number>();
+  let cumulative = 0;
+  tickerExecs.forEach((e) => {
+    const mk = monthKey(e.TradeDate);
+    if (!mk) return;
+
+    if (e.AssetClass === "OPT") {
+      cumulative += tradeNetCash(e);
+    }
+    cumulativePnlMap.set(mk, Number(cumulative.toFixed(2)));
+  });
+
+  const pnlTimeline = Array.from(cumulativePnlMap.entries()).map(
+    ([month, pnl]) => ({
+      month,
+      pnl,
+    })
+  );
+
+  const tickerList = Array.from(
+    new Set(
+      execs
+        .map((e) => getTickerFromExec(e))
+        .filter((v) => !!v && v !== "USD.CAD")
+    )
+  ).sort();
+
+  return {
+    ticker,
+    tickerList,
+    tickerExecs,
+    stockExecs,
+    optionExecs,
+    timeline,
+    stocks: st,
+    options: op,
+    capital: {
+      ...capRaw,
+      cspCapitalOpen: cap.cspCapitalOpen,
+      stockCapital: cap.stockCapital,
+      totalCapital: cap.totalCapital,
+    },
+    stockRow,
+    netSharesOpen,
+    stockCostBasisOpen,
+    avgCostOpen,
+    breakEvenStock,
+    breakEvenGlobal,
+    stockRealized,
+    optionRealized,
+    totalRealized,
+    optionPremiumAllTime,
+    openOptions,
+    openShortPuts,
+    openCoveredCalls,
+    stockBuyCount: stockBuys.length,
+    stockSellCount: stockSells.length,
+    optionTradeCount: optionExecs.length,
+    wheelStage,
+    premiumByMonth,
+    pnlTimeline,
+  };
 }
 
 export function getDashboardModel(execs: Exec[], pref?: PrefLike) {
   const method: StockMethod = pref?.stockMethod === "AVG" ? "AVG" : "FIFO";
 
   const ctx = assignWheelTags(execs);
-
   const st = computeStocks(
     execs,
     method,
     ctx.assignedBuyTradeIDs,
     ctx.ccActiveUnderlyings
   );
-
   const op = computeOptions(execs);
-
   const capRaw = computeCapitalSnapshot(
     execs,
     method,
     ctx.assignedBuyTradeIDs,
     ctx.ccActiveUnderlyings
   );
-
   const cap = getCapitalFields(capRaw);
 
   const roiRows = monthlyROI(execs, method);
