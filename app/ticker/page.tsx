@@ -3,7 +3,7 @@
 export const dynamic = "force-dynamic";
 
 import { useEffect, useMemo, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import {
   BarChart,
   Bar,
@@ -29,7 +29,6 @@ function money(v: number | null | undefined) {
 
 export default function TickerDashboardPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
 
   const [trades, setTrades] = useState<Exec[]>([]);
   const [loading, setLoading] = useState(true);
@@ -59,18 +58,23 @@ export default function TickerDashboardPage() {
         )
       ).sort();
 
-      const tickerFromUrl = String(searchParams.get("ticker") || "")
-        .trim()
-        .toUpperCase();
+let tickerFromUrl = "";
 
-      if (tickerFromUrl && tickers.includes(tickerFromUrl)) {
-        setSelectedTicker(tickerFromUrl);
-      } else if (tickers.length > 0) {
-        setSelectedTicker((prev) => {
-          if (prev && tickers.includes(prev)) return prev;
-          return tickers[0];
-        });
-      }
+if (typeof window !== "undefined") {
+  const params = new URLSearchParams(window.location.search);
+  tickerFromUrl = String(params.get("ticker") || "")
+    .trim()
+    .toUpperCase();
+}
+
+if (tickerFromUrl && tickers.includes(tickerFromUrl)) {
+  setSelectedTicker(tickerFromUrl);
+} else if (tickers.length > 0) {
+  setSelectedTicker((prev) => {
+    if (prev && tickers.includes(prev)) return prev;
+    return tickers[0];
+  });
+}
     } catch (err) {
       console.error(err);
       alert("Error loading trades");
