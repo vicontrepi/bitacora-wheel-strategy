@@ -233,15 +233,50 @@ export default function CalendarPage() {
 
                       if (!visibleWeeks.length) return null;
 
+                      const monthRealTotal = visibleWeeks.reduce(
+                        (acc, week) => acc + Number(week.realizedTotal || 0),
+                        0
+                      );
+
+                      const monthProjectedTotal = visibleWeeks.reduce(
+                        (acc, week) => acc + Number(week.projectedPremium || 0),
+                        0
+                      );
+
+                      const monthStructuresTotal = visibleWeeks.reduce(
+                        (acc, week) => acc + Number(week.projectedExpirations || 0),
+                        0
+                      );
+
                       return (
                         <div
                           key={`${month.year}-${month.month}`}
                           className="min-w-[320px] rounded-2xl border border-slate-800 bg-slate-900 p-4"
                         >
-                          <div className="mb-3 border-b border-slate-800 pb-2">
-                            <h3 className="text-lg font-semibold">
-                              {month.monthLabel}
-                            </h3>
+                          <div className="mb-3 border-b border-slate-800 pb-3">
+                            <div className="flex items-start justify-between gap-3">
+                              <h3 className="text-lg font-semibold">
+                                {month.monthLabel}
+                              </h3>
+
+                              <div className="text-right text-xs">
+                                <div className="text-slate-400">
+                                  Real{" "}
+                                  <span className="font-semibold text-emerald-400">
+                                    ${fmtMoney(monthRealTotal)}
+                                  </span>
+                                </div>
+                                <div className="text-slate-400">
+                                  Proj{" "}
+                                  <span className="font-semibold text-amber-300">
+                                    ${fmtMoney(monthProjectedTotal)}
+                                  </span>
+                                </div>
+                                <div className="text-slate-500">
+                                  Exp {monthStructuresTotal}
+                                </div>
+                              </div>
+                            </div>
                           </div>
 
                           <div className="space-y-2">
