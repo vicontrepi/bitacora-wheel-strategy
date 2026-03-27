@@ -26,11 +26,11 @@ function isTodayInsideWeek(startDate?: string, endDate?: string) {
   return today >= start && today <= end;
 }
 
-function cellTone(value: number, isCurrentWeek: boolean) {
+function cellTone(realized: number, isCurrentWeek: boolean) {
   const base =
-    value > 0
+    realized > 0
       ? "border-emerald-700 bg-emerald-950/40"
-      : value < 0
+      : realized < 0
       ? "border-rose-700 bg-rose-950/40"
       : "border-slate-700 bg-slate-900";
 
@@ -67,7 +67,9 @@ export default function CalendarPage() {
   }, [calendar]);
 
   const weeksWithData = useMemo(() => {
-    return allWeeks.filter((w) => w.tradesCount > 0);
+    return allWeeks.filter(
+      (w) => w.tradesCount > 0 || w.projectedExpirations > 0
+    );
   }, [allWeeks]);
 
   const bestWeek = useMemo(() => {
@@ -92,6 +94,14 @@ export default function CalendarPage() {
     );
   }, [weeksWithData]);
 
+  const topProjectedWeek = useMemo(() => {
+    const futureWeeks = weeksWithData.filter((w) => w.projectedPremium > 0);
+    if (!futureWeeks.length) return null;
+    return [...futureWeeks].sort(
+      (a, b) => b.projectedPremium - a.projectedPremium
+    )[0];
+  }, [weeksWithData]);
+
   if (loading) {
     return (
       <main className="min-h-screen bg-slate-950 text-slate-100">
@@ -111,7 +121,7 @@ export default function CalendarPage() {
           <div>
             <h1 className="text-3xl font-bold">Trading Calendar</h1>
             <p className="mt-2 text-slate-400">
-              Weekly view of past, present, and future behavior from your trades.
+              Weekly view of realized results and structures expiring.
             </p>
           </div>
 
@@ -146,7 +156,7 @@ export default function CalendarPage() {
           </div>
         </div>
 
-        <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-3">
+        <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-4">
           <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
             <div className="text-sm text-slate-400">Best Week</div>
             <div className="mt-2 text-2xl font-bold text-emerald-400">
@@ -180,6 +190,20 @@ export default function CalendarPage() {
               Based on weeks with activity
             </div>
           </div>
+
+          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+            <div className="text-sm text-slate-400">Top Structures Week</div>
+            <div className="mt-2 text-2xl font-bold text-amber-300">
+              {topProjectedWeek
+                ? `$${fmtMoney(topProjectedWeek.projectedPremium)}`
+                : "$0"}
+            </div>
+            <div className="mt-1 text-xs text-slate-500">
+              {topProjectedWeek
+                ? `${topProjectedWeek.year}-${String(topProjectedWeek.month).padStart(2, "0")} ${topProjectedWeek.label}`
+                : "No future expirations"}
+            </div>
+          </div>
         </div>
 
         {calendar.length === 0 ? (
@@ -203,7 +227,8 @@ export default function CalendarPage() {
                   <div className="flex min-w-max gap-4">
                     {yearBlock.months.map((month) => {
                       const visibleWeeks = month.weeks.filter(
-                        (week) => week.tradesCount > 0
+                        (week) =>
+                          week.tradesCount > 0 || week.projectedExpirations > 0
                       );
 
                       if (!visibleWeeks.length) return null;
@@ -211,7 +236,7 @@ export default function CalendarPage() {
                       return (
                         <div
                           key={`${month.year}-${month.month}`}
-                          className="min-w-[260px] rounded-2xl border border-slate-800 bg-slate-900 p-4"
+                          className="min-w-[320px] rounded-2xl border border-slate-800 bg-slate-900 p-4"
                         >
                           <div className="mb-3 border-b border-slate-800 pb-2">
                             <h3 className="text-lg font-semibold">
@@ -247,15 +272,38 @@ export default function CalendarPage() {
                                           : "text-slate-300"
                                       }`}
                                     >
-                                      ${fmtMoney(week.realizedTotal)}
+                                      Real: ${fmtMoney(week.realizedTotal)}
+                                    </div>
+                                  </div>
+
+                                  <div className="mb-2 rounded-lg border border-slate-800 bg-slate-950/60 p-2">
+                                    <div className="text-[11px] uppercase tracking-wide text-slate-500">
+                                      Structures Expiring
+                                    </div>
+                                    <div className="mt-1 flex items-center justify-between">
+                                      <div className="text-sm font-semibold text-amber-300">
+                                        Proj: ${fmtMoney(week.projectedPremium)}
+                                      </div>
+                                      <div className="text-xs text-slate-400">
+                                        Total: {week.projectedExpirations}
+                                      </div>
+                                    </div>
+
+                                    <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-slate-400">
+                                      <div>IC: {week.projectedIcCount}</div>
+                                      <div>PCS: {week.projectedPcsCount}</div>
+                                      <div>CCS: {week.projectedCcsCount}</div>
+                                      <div>CSP: {week.projectedCspCount}</div>
+                                      <div>CC: {week.projectedCcCount}</div>
+                                      <div>Other: {week.projectedOtherCount}</div>
                                     </div>
                                   </div>
 
                                   <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-slate-400">
                                     <div>Trades: {week.tradesCount}</div>
-                                    <div>Exp: {week.openExpirations}</div>
-                                    <div>CSP: {week.cspCount}</div>
-                                    <div>CC: {week.ccCount}</div>
+                                    <div>Real Exp: {week.openExpirations}</div>
+                                    <div>Wheel CSP: {week.cspCount}</div>
+                                    <div>Wheel CC: {week.ccCount}</div>
                                     <div>Assigned: {week.assignedCount}</div>
                                     <div>Cap: ${fmtMoney(week.capitalApprox)}</div>
                                   </div>

@@ -1,10 +1,11 @@
 import type { Exec } from "./engine/types";
 import { computeOptions, computeStocks, buildWheelContext } from "./ibkr-engine";
+import { buildExpiringStructures } from "./structure-engine";
 
 export type CalendarCell = {
   year: number;
-  month: number; // 1-12
-  week: number; // 1-6
+  month: number;
+  week: number;
   label: string;
   startDate?: string;
   endDate?: string;
@@ -12,6 +13,16 @@ export type CalendarCell = {
   realizedStocks: number;
   realizedOptions: number;
   realizedTotal: number;
+
+  projectedPremium: number;
+  projectedExpirations: number;
+
+  projectedIcCount: number;
+  projectedPcsCount: number;
+  projectedCcsCount: number;
+  projectedCspCount: number;
+  projectedCcCount: number;
+  projectedOtherCount: number;
 
   tradesCount: number;
   openExpirations: number;
@@ -60,7 +71,7 @@ function getWeekOfMonth(dateStr?: string) {
   const first = new Date(d.getFullYear(), d.getMonth(), 1);
   first.setHours(0, 0, 0, 0);
 
-  const offset = first.getDay(); // domingo=0
+  const offset = first.getDay();
   return Math.ceil((d.getDate() + offset) / 7);
 }
 
@@ -85,9 +96,22 @@ function keyFor(y: number, m: number, w: number) {
 }
 
 function getExecKey(e: Exec) {
-  const y = new Date(e.TradeDate).getFullYear();
-  const m = new Date(e.TradeDate).getMonth() + 1;
+  const d = new Date(e.TradeDate);
+  const y = d.getFullYear();
+  const m = d.getMonth() + 1;
   const w = getWeekOfMonth(e.TradeDate);
+  return { y, m, w, key: keyFor(y, m, w) };
+}
+
+function getDateBucketKey(dateStr?: string) {
+  if (!dateStr) return null;
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return null;
+
+  const y = d.getFullYear();
+  const m = d.getMonth() + 1;
+  const w = getWeekOfMonth(dateStr);
+
   return { y, m, w, key: keyFor(y, m, w) };
 }
 
@@ -100,16 +124,26 @@ export function buildCalendarModel(
   if (!validTrades.length) return [];
 
   const ctx = buildWheelContext(validTrades);
+  const optionsAgg = computeOptions(validTrades);
 
   const bucketMap = new Map<string, Exec[]>();
   const yearMonthSet = new Set<string>();
 
   validTrades.forEach((t) => {
-    const { y, m, w, key } = getExecKey(t);
+    const { y, m, key } = getExecKey(t);
     yearMonthSet.add(`${y}-${m}`);
 
     if (!bucketMap.has(key)) bucketMap.set(key, []);
     bucketMap.get(key)!.push(t);
+  });
+
+  const openOptionRows = optionsAgg.rows.filter((r) => r.status === "OPEN" && r.expiry);
+  const structures = buildExpiringStructures(openOptionRows);
+
+  structures.forEach((s) => {
+    const bucket = getDateBucketKey(s.expiry);
+    if (!bucket) return;
+    yearMonthSet.add(`${bucket.y}-${bucket.m}`);
   });
 
   const yearMonthPairs = Array.from(yearMonthSet)
@@ -118,6 +152,49 @@ export function buildCalendarModel(
       return { year: Number(ys), month: Number(ms) };
     })
     .sort((a, b) => a.year - b.year || a.month - b.month);
+
+  const projectedMap = new Map<
+    string,
+    {
+      projectedPremium: number;
+      projectedExpirations: number;
+      projectedIcCount: number;
+      projectedPcsCount: number;
+      projectedCcsCount: number;
+      projectedCspCount: number;
+      projectedCcCount: number;
+      projectedOtherCount: number;
+    }
+  >();
+
+  structures.forEach((s) => {
+    const bucket = getDateBucketKey(s.expiry);
+    if (!bucket) return;
+
+    const key = bucket.key;
+    const prev = projectedMap.get(key) || {
+      projectedPremium: 0,
+      projectedExpirations: 0,
+      projectedIcCount: 0,
+      projectedPcsCount: 0,
+      projectedCcsCount: 0,
+      projectedCspCount: 0,
+      projectedCcCount: 0,
+      projectedOtherCount: 0,
+    };
+
+    prev.projectedPremium += Number(s.premium || 0);
+    prev.projectedExpirations += 1;
+
+    if (s.structure === "IRON_CONDOR") prev.projectedIcCount += 1;
+    else if (s.structure === "PUT_CREDIT_SPREAD") prev.projectedPcsCount += 1;
+    else if (s.structure === "CALL_CREDIT_SPREAD") prev.projectedCcsCount += 1;
+    else if (s.structure === "CASH_SECURED_PUT") prev.projectedCspCount += 1;
+    else if (s.structure === "COVERED_CALL") prev.projectedCcCount += 1;
+    else prev.projectedOtherCount += 1;
+
+    projectedMap.set(key, prev);
+  });
 
   const monthMap = new Map<string, CalendarMonth>();
 
@@ -163,6 +240,17 @@ export function buildCalendarModel(
             0
           );
 
+      const projected = projectedMap.get(bucketKey) || {
+        projectedPremium: 0,
+        projectedExpirations: 0,
+        projectedIcCount: 0,
+        projectedPcsCount: 0,
+        projectedCcsCount: 0,
+        projectedCspCount: 0,
+        projectedCcCount: 0,
+        projectedOtherCount: 0,
+      };
+
       const range = getWeekRange(year, month, week);
 
       weeks.push({
@@ -172,15 +260,27 @@ export function buildCalendarModel(
         label: `W${week}`,
         startDate: range.startDate,
         endDate: range.endDate,
+
         realizedStocks: Number(stocks.totalRealized || 0),
         realizedOptions: Number(options.realizedTotal || 0),
         realizedTotal:
           Number(stocks.totalRealized || 0) + Number(options.realizedTotal || 0),
+
+        projectedPremium: Number(projected.projectedPremium || 0),
+        projectedExpirations: Number(projected.projectedExpirations || 0),
+        projectedIcCount: Number(projected.projectedIcCount || 0),
+        projectedPcsCount: Number(projected.projectedPcsCount || 0),
+        projectedCcsCount: Number(projected.projectedCcsCount || 0),
+        projectedCspCount: Number(projected.projectedCspCount || 0),
+        projectedCcCount: Number(projected.projectedCcCount || 0),
+        projectedOtherCount: Number(projected.projectedOtherCount || 0),
+
         tradesCount: weekTrades.length,
         openExpirations: openOptions.filter((r) => !!r.expiry).length,
         assignedCount,
         cspCount,
         ccCount,
+
         capitalApprox,
       });
     }
